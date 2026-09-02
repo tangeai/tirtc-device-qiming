@@ -4,10 +4,10 @@
 | --- | --- |
 | 应用工程 | TiRTC WT9932P4C61-TINY Device App |
 | 应用版本 | `1.0.0`，启明独立板型版本 |
-| 源码基线 | 启明首版独立快照；发布仓只保留一个初始提交，移植前后的调试历史保留在仓外 Git 备份 |
+| 源码基线 | 1.0.0 Tag 为单一初始快照；后续使用说明独立提交，旧调试历史保留在仓外 Git 备份 |
 | 独立源码仓 | https://github.com/tangeai/tirtc-device-qiming |
 | 项目 Tag | `esp32-p4-wt9932p4c61-tiny-device-app-v1.0.0` |
-| 发布范围 | 启明独立源码发布；不包含构建或烧录产物，不代表整机回归通过 |
+| 发布范围 | Git 提供源码；同版本 Release 提供应用 BIN、16 MiB 完整镜像、烧录说明和校验清单 |
 | 目标芯片 | ESP32-P4 |
 | 目标开发板 | WT9932P4C61-TINY / WT01P461-S1 |
 | ESP-IDF | `5.5.4` |
@@ -28,7 +28,7 @@
 - `TIRTC_VERSION_MAJOR/MINOR/PATCH` 为 `2.3.0`。
 - 当前 P4 Release 构建库包含主动连接失败资源清理、TURN 轻量查询 key、NACK scratch/容量修复和 12KB connection RTC task 栈。
 - FreeRTOS tick 为 `1000Hz`，trace、stats formatting 和 runtime stats 关闭。
-- `CONFIG_LWIP_MAX_SOCKETS=10`。
+- APP 的 `CONFIG_LWIP_MAX_SOCKETS=16`。SDK 历史元信息写为 `10`，原始构建配置快照未找回；本版按已接受的配置证据缺口保留，不据此宣称存在运行时不匹配，也未改变库和 APP 参数。
 - 启用 SDK 码率自适应时，在连接建立后注册 `TiRtcConnSetVideoBitrateParams()`。
 - 启用后，`on_update_bitrate()` 只投递绝对目标码率到应用控制任务，不在 SDK 回调线程内调整编码器。
 - `TIRTC_VIDEO_JPEG` 用于微信 VoIP MJPEG 下行。
@@ -41,7 +41,7 @@
 - ESP32-C61 使用 ESP-Hosted SDIO：CLK18、CMD19、D0-D3 为 14/15/16/17、复位 GPIO13。
 - ESP-Hosted 以仓内本地组件固定在 `2.12.12`，SDIO 层保留 C61/P4 已验证的 PSRAM DMA 双缓冲、显式所有权队列和背压策略。
 - 设备间 H264 双向视频和微信 H264 上行/MJPEG 下行保留原业务链路。
-- 音频底板资料未提供，麦克风、扬声器、PCMA、AI Chat 音频和 AEC 当前由板级能力门控关闭。
+- 音频底板资料未提供，采集、播放和 AEC 当前由板级能力门控关闭。
 - 传输类型由服务端协商为 TGTRP 或 KCP；TGMP 与本地自动弱网降级均默认关闭，避免两个控制器同时改写编码器策略。
 - JPEG 解码器、H264 编码器和 RTC 媒体池在启动早期预热。
 
@@ -55,8 +55,8 @@ RTC 服务地址保留调用方配置的协议，移除按 SDK 版本将 HTTPS �
 
 - 版本、源码范围、SDK 校验、引用和差异静态复核已完成；使用 ESP-IDF `5.5.4` 在唯一 `build` 目录完成 APP 和 Bootloader 无缓存重编，均为 0 警告、0 错误。
 - 构建前校验 IDF 环境版本及 P4/C61/SDIO 板级配置，避免缺失 Kconfig 环境变量时生成错误板型配置。
-- 源码发布不包含临时构建产物；构建后仅整理文档和许可证，业务代码、SDK 与配置保持一致。本次没有新增烧录或真机证据。
+- 从 1.0.0 Tag 对应源码正式干净构建一次，应用 BIN 和 16 MiB 完整镜像来自同一套输出；固件仅作为 Release 附件，不进入 Git。本次没有新增烧录或真机证据。
 - SDK 构建证据与 APP 真机证据分开；更换当前 SDK 后的整机、重复连接和长稳回归尚未完成。
-- 微信下行视频卡顿仍是待验证问题，本次源码发布不声明该问题已解决。
+- 微信下行视频卡顿仍是待验证问题，本版不声明该问题已解决。
 
 源码来源、构建输入和公开范围见 [SOURCE_PROVENANCE.md](SOURCE_PROVENANCE.md)。

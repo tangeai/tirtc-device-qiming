@@ -8,7 +8,7 @@
 | --- | --- |
 | `drivers` | 摄像头、显示、触摸、音频 codec、DMA 和硬件生命周期 |
 | `media` | 摄像头 H264 pipeline、像素格式转换、媒体档位和运行指标 |
-| `services` | IPC、设备呼叫、微信 VoIP、AI Chat、绑定和 OTA 等业务服务 |
+| `services` | IPC、设备呼叫、微信 VoIP、绑定等业务服务 |
 | `protocols/tirtc` | TiRTC SDK、连接句柄、订阅、回调和媒体收发队列 |
 | `application` | 业务进入/退出、资源租约和所有权切换 |
 | `ui` | 状态展示和用户动作，不持有媒体设备或连接 |
@@ -82,18 +82,6 @@ ESP-Hosted streaming RX 使用两个 `64KB` cache-aligned PSRAM DMA 缓冲，只
 
 统一输出由 12 个 `640x480` RGB565 PSRAM slot 组成，约 `7.03MiB`。Qiming DSI 双缓冲由 LVGL 独占，视频帧和浮层都通过同一显示所有者提交，避免 direct-LCD 与 LVGL 交换帧缓冲时发生竞争。固定池描述的是容量，不代表播放时必须填满队列。
 
-## 音频和 AEC
-
-当前音频底板未适配，采集、播放和 AEC 不初始化。以下是保留代码的所有权设计，不是本板已验证的音频功能：
-
-- IPC、设备呼叫和微信 VoIP 使用 RTC media owner。
-- AI Chat 使用独立 media owner。
-- 进入业务时先 prepare 自适应播放缓冲，媒体真正 active 后启用 AEC。
-- AEC 优先使用 codec 同步 DAC reference；无法锁定时使用 `80ms` 软件延迟参考。
-- 退出业务时停止采集、播放和 AEC 处理，但保留预热工作区供后续会话复用。
-
-播放控制器根据 underflow、积压和抖动调整目标缓冲，不通过长期固定大延迟掩盖弱网。
-
 ## TiRTC 发送与码率
 
 `main/protocols/tirtc/tirtc_session.c` 持有连接和发送队列：
@@ -135,7 +123,7 @@ ESP-Hosted streaming RX 使用两个 `64KB` cache-aligned PSRAM DMA 缓冲，只
 
 1. 验证横屏显示和触摸坐标。
 2. 验证绑定、正式 MQTT 和 TiRTC 上线。
-3. 分别验证 IPC、设备呼叫和微信 VoIP；AI Chat 在音频底板适配前应明确返回“不支持”，不能进入半初始化页面。
+3. 分别验证 IPC、设备呼叫和微信 VoIP。
 4. 对微信 VoIP 确认 H264 上行与 MJPEG 下行均有首帧证据。
 5. 先保持每个主要场景至少 5 分钟，再做独立长稳；观察 fps、bitrate、queue、DMA largest block 和 PSRAM pool。当前不做音频/AEC 功能通过结论。
 6. 每个场景连续进入和退出至少 10 次，确认无残留资源和连接句柄。

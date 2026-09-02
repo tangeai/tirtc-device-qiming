@@ -1,160 +1,223 @@
-# TiRTC 启明 WT9932P4C61-TINY Device Monitor
+# TiRTC 启明 WT9932P4C61-TINY
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![ESP-IDF](https://img.shields.io/badge/ESP--IDF-5.5.4-E7352C?logo=espressif)](https://docs.espressif.com/projects/esp-idf/)
-[![Chip](https://img.shields.io/badge/Chip-ESP32--P4-000000)](https://www.espressif.com/en/products/socs/esp32-p4)
-[![TiRTC SDK](https://img.shields.io/badge/TiRTC%20SDK-2.3.0-1769AA)](https://docs.tange.ai/products/tirtc/en/overview/what-is-tirtc.html)
+## 使用教程
 
-这是面向启明云端 WT9932P4C61-TINY / WT01P461-S1 的完整设备应用。
-ESP32-P4 负责摄像头、H264 编码、视频解码、触摸屏和业务 UI；
-ESP32-C61 通过 ESP-Hosted/SDIO 提供 Wi-Fi。源码包含设备绑定、ThingConnect、
-IPC、设备互呼、微信 VoIP、AI Chat 和 OTA 分层，当前板型未接入音频底板。
+### 1. 准备开发板
 
-启明版本在本仓独立维护，文档入口与
-[TiRTC 设备示例统一仓](https://github.com/tangeai/tirtc-device-example)保持一致的组织方式。
-当前 `1.0.0` 只发布源码，不提供 BIN、完整烧录镜像或 `release_assets`。
+本工程用于启明云端 **WT9932P4C61-TINY / WT01P461-S1**：ESP32-P4 主芯片，
+ESP32-C61 提供 Wi-Fi，配合 ST7102 屏幕、ST7123 触摸和 SC2336 MIPI 摄像头。
+请勿烧录到 Waveshare 或其他 P4 板型。
 
-## 从这里开始
+- 断电后连接屏幕和摄像头，核对排线方向，再接通稳定电源。
+- 使用可传数据的 USB 线连接 P4 的 **FUSB / USB Serial-JTAG** 下载口。
+- 关闭占用串口的监视器，确认电脑能识别 P4 串口。
+- 本包要求 P4 芯片修订版 `v3.1` 至 `v3.99`；烧录工具报告不兼容时停止，不使用强制写入。
+- C61 需预先安装与 ESP-Hosted `2.12.12` 兼容的从机固件；烧录 P4 不会更新 C61。
+- 当前不含音频底板，以下按视频操作说明，不提供麦克风和扬声器功能。
 
-| 目标 | 入口 |
+接口位置和线序见 [Wireless-Tag 板级资料](https://wiki.wireless-tag.com/docs/zh/WT9932P4C61-TINY/board_features.html)。
+
+### 2. 下载固件
+
+打开 [1.0.0 Release](https://github.com/tangeai/tirtc-device-qiming/releases/tag/esp32-p4-wt9932p4c61-tiny-device-app-v1.0.0)，
+在 Assets 中下载固件、校验文件和烧录说明：
+
+| 文件 | 用途 |
 | --- | --- |
-| 安装环境、构建、烧录和完成首次联网 | [开发者上手指南](docs/GETTING_STARTED_CN.md) |
-| 理解视频、PSRAM、SDIO 和连接归属 | [P4 媒体架构](docs/P4_MEDIA_ARCHITECTURE.md) |
-| 核对应用、SDK、工具链和静态库哈希 | [版本契约](VERSION.md) |
-| 核对开发来源、公开范围和验证边界 | [源码来源](SOURCE_PROVENANCE.md) |
-| 核对开发板接口和电气连接 | [Wireless-Tag 板级资料](https://wiki.wireless-tag.com/docs/zh/WT9932P4C61-TINY/board_features.html) |
+| [完整镜像](https://github.com/tangeai/tirtc-device-qiming/releases/download/esp32-p4-wt9932p4c61-tiny-device-app-v1.0.0/esp32p4-qiming-wt9932p4c61-tiny-full-v1.0.0.bin) | 推荐，16 MiB，从 `0x0` 烧录 |
+| [应用 BIN](https://github.com/tangeai/tirtc-device-qiming/releases/download/esp32-p4-wt9932p4c61-tiny-device-app-v1.0.0/esp32p4-qiming-wt9932p4c61-tiny-app-v1.0.0.bin) | 仅应用程序，供匹配分区和启动配置的开发环境使用 |
+| `SHA256SUMS.txt` | 校验下载文件是否完整 |
+| `release-manifest.json` | 核对源码、构建输入、烧录地址和固件哈希 |
+| `FLASHING_CN.md` | 随包提供的完整烧录步骤 |
 
-从本项目 Tag 开始，工程位于仓库根目录：
+完整镜像应为 **16,777,216 bytes**。在下载目录打开 PowerShell：
+
+```powershell
+(Get-Item .\esp32p4-qiming-wt9932p4c61-tiny-full-v1.0.0.bin).Length
+Get-FileHash -Algorithm SHA256 .\esp32p4-qiming-wt9932p4c61-tiny-full-v1.0.0.bin
+```
+
+与同一 Release 的 `SHA256SUMS.txt` 比较，大小或哈希不符时不要烧录。
+
+### 3. 烧录到 P4
+
+**完整镜像会覆盖 P4 的全部 Flash，清除原有 Wi-Fi、绑定和本地设置。**
+烧录后需要重新配网，并在平台确认绑定关系。
+
+#### 网页烧录
+
+1. 使用 Chrome 或 Edge 打开 [Espressif ESP Tool](https://espressif.github.io/esptool-js/)。
+2. 连接 P4 下载口，选择电脑实际枚举的串口，确认识别为 ESP32-P4。
+3. 添加 `esp32p4-qiming-wt9932p4c61-tiny-full-v1.0.0.bin`，地址填 **`0x0`**。
+4. 若工具提供参数选择，设置 Flash Size `16MB`、Mode `DIO`、Frequency `80MHz`。
+5. 开始烧录，等待写入和校验完成，再复位开发板。
+
+自动进入下载模式失败时，按住 `BOOT`，点按 `RESET`，再松开 `BOOT`，重新连接。
+不要把 C61 串口当作 P4，也不要给完整镜像额外添加第二份应用 BIN。
+
+#### 命令行烧录
+
+以下命令使用本包离线校验所用的 `esptool 4.12.0`：
+
+```powershell
+py -m pip install "esptool==4.12.0"
+py -m esptool version
+$port = Read-Host "P4 serial port"
+py -m esptool --chip esp32p4 --port $port --baud 460800 write_flash --flash_mode dio --flash_freq 80m --flash_size 16MB 0x0 .\esp32p4-qiming-wt9932p4c61-tiny-full-v1.0.0.bin
+```
+
+高速写入失败时先检查数据线、供电和串口占用，再将波特率改为 `115200` 重试。
+不要使用 `--force` 绕过检查，也不必提前执行整片擦除。
+
+单独的应用 BIN 链接地址为 `0x10000`，**不能写到 `0x0`**。它不含启动程序、分区表和
+资源分区，也不会改变当前启动分区；首次体验或恢复设备请使用完整镜像。
+
+### 4. 配网与绑定
+
+1. 复位后检查 `640x480` 横屏界面和触摸方向。
+2. 在绑定提示中点击“设置WiFi”，或进入“设置 -> Wi-Fi 设置”。
+3. 等待扫描结果，选择网络并输入密码；确认屏幕显示已连接，串口出现 `wifi connected` 和 IP。
+4. 等待设备校时、获取绑定会话及订阅完成，屏幕显示有效的绑定码或二维码后再绑定。
+5. 在 [设备管理网页](https://demo-open.tange-ai.com/devices) 登录账号，按页面提示添加设备、输入绑定码或扫码。
+6. 确认网页中的设备在线，再进入视频功能。能扫描 Wi-Fi、拿到 IP 和平台在线是三个不同阶段。
+
+绑定码过期后使用设备新显示的码。完整镜像会清除本地凭据，但不替你删除云端账号关系；
+若平台提示已绑定，先在原账号中确认设备归属，不要反复擦除 Flash。
+
+### 5. IPC 实时查看
+
+1. 保持设备联网，在设备端进入“查看”。
+2. 在设备管理网页找到该设备，点击“实时”，或使用设备页面提供的查看入口。
+3. 等待连接完成和首帧到达，再检查画面是否持续更新。仅显示“已连接”不代表已有视频。
+4. 在镜头前移动物体，检查运动画面；静态画面不能用于判断持续帧率。
+5. 结束后退出网页查看，再测试一次重新进入。
+
+此场景由设备摄像头向网页发送 H264，设备本地不显示摄像头预览。
+如果只有黑屏，依次核对订阅、摄像头首帧、编码和发送日志，不先改分辨率。
+
+### 6. 设备呼叫设备
+
+1. 两台设备分别完成联网和绑定，确认双方平台状态在线。
+2. 进入“设备呼叫 -> 联系人列表”，等待本次云端刷新完成；失败时使用右上角刷新重试。
+3. 如果没有对方，进入“添加联系人”，输入对方的 12 位 Device ID，或扫描对方设备呼叫首页的二维码。
+4. 需要审批的联系人先在对方完成确认，再回到联系人列表刷新。
+5. 选择在线联系人发起视频呼叫；对方在来电界面接听。
+6. 接通后分别检查两台屏幕的远端画面，结束时使用通话界面的挂断按钮。
+7. 再交换主叫、被叫测试一次，确认两边均返回空闲状态。
+
+对端也要支持视频能力。联系人存在不等于设备当前在线；没有视频能力的对端不能显示双向画面。
+
+### 7. 微信视频
+
+1. 在正式版微信小程序登录并完成设备呼叫授权。未授权时，添加微信联系人会提示先授权。
+2. 在设备端进入“微信呼叫 -> 联系人列表”，等待授权联系人同步。
+3. 需要手动添加时，进入“添加联系人”，使用小程序提供的 28 位 Open ID。
+4. 从设备选择联系人发起呼叫，在手机接听；分别观察手机收到的设备画面和设备收到的手机画面。
+5. 反向测试时，从小程序选择设备发起视频呼叫，在设备来电界面接听。
+6. 结束后确认两端退出通话，再尝试第二次呼叫。
+
+设备上行使用 H264，手机下行由服务端转换为 MJPEG 后显示。
+下行视频还依赖小程序授权和服务端转发；接通但无图时先分清哪个方向缺少首帧。
+若出现卡顿，保留该次连接与媒体日志，不以通话接通代替流畅性验收。
+
+### 8. 日志与常见问题
+
+串口日志波特率为 `115200`。启用串口终端后，可用以下查询命令检查状态：
+
+```text
+AT+HELP
+AT+MEM?
+AT+MEDIA?
+AT+CALL?
+AT+WX?
+AT+HOSTED?
+AT+WIFISTATS
+```
+
+| 现象 | 检查顺序 |
+| --- | --- |
+| 电脑找不到串口 | USB 数据线、P4 FUSB 接口、端口占用、BOOT/RESET 下载模式 |
+| 烧录后无界面或方向错误 | 固件是否为启明版、屏幕型号、断电后检查排线 |
+| Wi-Fi 列表为空 | C61 固件、Hosted 握手、SDIO 和供电 |
+| 已连 Wi-Fi 但没有绑定码 | 时间同步、服务发现、HTTP 返回和临时 MQTT 订阅 |
+| 联系人离线或呼叫失败 | 对方在线状态、联系人刷新、授权及通话状态 |
+| 已接通但视频黑屏 | 区分上行/下行，检查订阅、首帧、解码和显示 |
+| 视频卡顿或长时间运行异常 | 记录帧率、队列、内部 RAM 最大连续块和首次异常时间 |
+
+## 代码架构
+
+### 分层与目录
+
+```text
+main/application/       应用进入、退出、状态编排和资源所有权
+main/ui/                LVGL 页面、触摸交互和显示资源
+main/services/          绑定、在线、IPC、设备呼叫、微信呼叫
+main/protocols/         HTTP、MQTT、RTC 和 TiRTC 适配
+main/connectivity/      Wi-Fi 管理和网络状态
+main/media/             摄像头编码管线、像素转换和媒体策略
+main/drivers/           摄像头、显示和其他硬件驱动
+main/hardware/          启明板型能力、引脚和初始化
+main/platform/          存储、时间、日志和内存策略
+components/tirtc_sdk/   TiRTC 头文件、静态库和版本契约
+```
+
+UI 只显示状态并提交用户动作；应用层切换业务和资源；服务层执行呼叫、绑定流程；
+协议层管理连接与收发；驱动层持有硬件。页面不能直接释放 RTC 句柄或抢占摄像头。
+进入和退出业务走同一所有者，防止下一次呼叫仍占用上一会话的任务或缓冲。
+
+### 视频与显示
+
+```text
+上行：SC2336 -> YUV420 -> P4 H264 硬编码 -> 发送池 -> TiRTC
+设备下行：TiRTC -> H264 软件解码 -> 像素转换 -> LVGL/DSI
+微信下行：TiRTC -> JPEG 硬件解码 -> PPA 缩放/旋转 -> LVGL/DSI
+```
+
+摄像头管线见 [camera_pipeline.c](main/media/camera_pipeline.c)，
+连接与收发见 [tirtc_session.c](main/protocols/tirtc/tirtc_session.c)，
+下行呈现见 [call_video_renderer.c](main/services/call_video_renderer.c)。
+显示缓冲由 LVGL 统一提交，视频与浮层不各自交换屏幕缓冲。
+
+大块帧、发送池和适用任务栈放在 PSRAM；DMA 描述符及必须实时访问的控制结构留在内部 RAM。
+DMA 边界执行缓存同步，队列使用有界池，避免在持续通话中无限申请内存。
+更详细的所有权与媒体路径见 [P4 媒体架构](docs/P4_MEDIA_ARCHITECTURE.md)。
+
+### 配置入口
+
+| 文件 | 用途 |
+| --- | --- |
+| [app_config.h](main/application/app_config.h) | 服务入口、产品策略和空凭据占位 |
+| [Kconfig.projbuild](main/Kconfig.projbuild) | 板级能力、媒体和日志开关 |
+| [sdkconfig.defaults](sdkconfig.defaults) | 启明 P4/C61、SDIO、内存和分区默认配置 |
+| [media_tuning.h](main/media/media_tuning.h) | 各场景的编码和缓冲参数 |
+| [partitions.csv](partitions.csv) | Flash 分区布局 |
+
+Wi-Fi 在屏幕配置，设备凭据由绑定流程写入 NVS，不要写进源码。
+P4 不自带 Wi-Fi；不要将 C61/SDIO 配置改成 S3 原生 Wi-Fi，也不要直接替换本地修改过的 Hosted 组件。
+
+### 获取源码与构建
+
+使用 ESP-IDF `5.5.4` 和 RISC-V GCC `14.2.0_20260121`，先进入对应的 ESP-IDF PowerShell 环境：
 
 ```powershell
 git clone https://github.com/tangeai/tirtc-device-qiming.git
 cd tirtc-device-qiming
 git checkout esp32-p4-wt9932p4c61-tiny-device-app-v1.0.0
-```
-
-## 版本身份
-
-| 项目 | 当前值 |
-| --- | --- |
-| 应用版本 | `1.0.0` |
-| 发布日期 | `2026-09-02` |
-| 源码历史 | 首版独立快照，只保留一个初始提交 |
-| 项目 Tag | `esp32-p4-wt9932p4c61-tiny-device-app-v1.0.0` |
-| 目标板 | WT9932P4C61-TINY / WT01P461-S1 |
-| 网络 | ESP32-C61 + ESP-Hosted/SDIO |
-| ESP-IDF | `5.5.4` |
-| TiRTC SDK | `2.3.0` P4 Release 构建包，具体来源见版本契约 |
-| 屏幕 | ST7102 `480x640` 物理面板，`640x480` 横屏 UI |
-| 触摸 | ST7123，I2C0 GPIO7/GPIO8 |
-| 摄像头 | SC2336，原生 `1024x600@30fps` YUV420 档位 |
-| Flash | `16MB`，双 OTA 分区 |
-| 音频 | 等待可选底板适配，当前禁用 |
-
-P4 没有原生 Wi-Fi，构建 P4 工程不会更新 C61 从机固件。网络异常时，先核对
-C61 固件与 ESP-Hosted 的兼容性、SDIO 接线及复位信号，再沿网络和业务日志定位。
-
-## 主要能力
-
-以下描述源码具备的路径；精确版本的真机验证状态见“启动与验证”。
-
-- 屏幕配网，服务发现、绑定码、设备凭证保存和正式 MQTT/TiRTC 在线。
-- IPC 使用 SC2336 YUV420 与 P4 H264 硬件编码上行，不启用本地摄像头预览。
-- 设备呼叫保留 H264 上行和 constrained-baseline H264 下行。
-- 微信 VoIP 保留 H264 上行、服务端 MJPEG 下行及 `640x480` 横屏显示。
-- LVGL 页面覆盖 Wi-Fi、绑定、联系人、呼叫、设置和 OTA。
-- 业务生命周期统一编排连接及媒体资源，大块媒体缓冲和适用的任务栈优先放入 PSRAM。
-- 当前无麦克风、扬声器和 AEC；AI Chat 音频入口由板级能力门控，不宣称可用。
-
-## 1.0.0 更新
-
-- 固定启明屏幕、触摸、SC2336 和 C61 板级契约，独立于 Waveshare 板型维护。
-- ESP-Hosted 固定为仓内 `2.12.12`，保留 PSRAM 双缓冲、明确的队列所有权及背压处理。
-- TiRTC `2.3.0` 包包含主动连接失败回收、TURN 轻量查询、NACK 工作区容量修复，
-  以及 P4 connection RTC 任务 `12KiB` 栈；临时传输诊断代码不随本包发布。
-- 本地 H264 `1.3.6` 回移强制下一帧 IDR 接口，保留原有板级内存适配。
-- 构建前校验 IDF 环境及 P4/C61/SDIO 配置，避免选错板型或漏载 Kconfig。
-- 移除将 HTTPS 服务地址静默改为 HTTP 的旧兼容逻辑，保留配置协议和原有失败语义。
-- 微信主动呼叫使用正式版参数；TGMP 与本地自动弱网降级均默认关闭。
-
-## 默认媒体参数
-
-方向均以启明设备为参照；这些是配置目标，不是实测帧率或画质承诺。
-
-| 场景 | 当前源码默认值 |
-| --- | --- |
-| IPC 上行 | `1024x600@20fps`，`4Mbps`，H264，名义 GOP `2s` |
-| 设备呼叫上行 | `384x256@12fps`，`256kbps`，H264，名义 GOP `4s` |
-| 设备呼叫下行 | constrained-baseline H264，解码上限 `384x256`，等比例显示到 `640x480` |
-| 微信上行 | `480x320@15fps`，`480kbps`，H264，名义 GOP `2s` |
-| 微信下行 | 请求 MJPEG，长边 `480`、比例参数 `133`、方向参数 `1`、最高 `15fps` |
-| 微信显示契约 | 屏幕 `640x480`，`object_fit=contain`，`video_res_mode=fit_screen` |
-| 微信本地呈现 | 竖帧转横向后，PPA 等比 `cover` 到 `640x480`；与服务端显示请求分开 |
-| 音频 / AEC | 底板未适配，关闭 |
-| SDK/TGMP 码率控制 | 默认关闭 |
-| 本地自动弱网降级 | 默认关闭 |
-
-微信下行实际尺寸由微信与服务端共同决定，请求参数不等于实际输出。
-TGTRP 或 KCP 由服务端协商，不能用 `p2p=kcp` 构建参数代替运行时结论。
-首次出流、订阅恢复和关键帧请求仍可触发 IDR，名义 GOP 不等于故障等待时间。
-
-## 配置与构建
-
-Wi-Fi 在屏幕配置并保存到 NVS，设备凭证由绑定流程下发，不需要写入源码。
-应用入口在 [app_config.h](main/application/app_config.h)，板级开关在
-[Kconfig.projbuild](main/Kconfig.projbuild)，默认配置在 [sdkconfig.defaults](sdkconfig.defaults)，
-媒体参数在 [media_tuning.h](main/media/media_tuning.h)。
-
-进入已安装的 ESP-IDF `5.5.4` 环境后执行：
-
-```powershell
 . "$env:IDF_PATH\export.ps1"
+idf.py --version
 idf.py -B build reconfigure build
 ```
 
-本仓保留启明的 `sdkconfig` 和 `sdkconfig.defaults`，使用唯一 `build` 目录。
-不要把当前已验证的 IDF 5.5.4 环境原地覆盖为 6.x。
-本地开发烧录使用构建生成的 `build/flasher_args.json` 文件及偏移；
-应用 BIN 不能单独写到 `0x0`。详细步骤见上手指南。
+工程位于仓库根目录，统一使用 `build` 目录；首次构建需要下载 Component Manager 依赖。
+保留启明的 `sdkconfig` 与 `sdkconfig.defaults`，不要覆盖现有 IDF 安装来尝试其他大版本。
 
-## 启动与验证
+修改代码后按生成的清单烧录并观察日志：
 
-复位后先核对版本、板型和网络阶段；下面是日志字段示意，不是本次新采集的真机日志：
-
-```text
-firmware version: 1.0.0 project=tirtc_esp32p4_wt9932p4c61_tiny_device_app ...
-system ready: board=wt9932p4c61_tiny_qiming display=1 touch=1 audio=0/0 camera=1
-wifi connected: ssid=... ip=...
-binding verification code ready: mqtt subscribed
+```powershell
+$port = Read-Host "P4 serial port"
+idf.py -B build -p $port flash monitor
 ```
 
-开发侧已在唯一 `build` 目录完成 APP 和 Bootloader 无缓存重编，编译警告和错误均为 0。
-此后只整理 Markdown 和许可证，业务代码、SDK、分区和配置未改变。
-[源码来源](SOURCE_PROVENANCE.md)记录构建输入身份和验证边界。
-
-当前 SDK 更换后的整机、重复连接、弱网和长稳回归尚未完成。
-微信下行卡顿仍为待验证问题，本次不宣称已解决，也不以构建通过代替真机验收。
-
-## 目录
-
-```text
-components/tirtc_sdk/  TiRTC 头文件、静态库和版本契约
-main/application/      生命周期、业务状态和资源所有权
-main/connectivity/     网络状态和 Wi-Fi 管理
-main/drivers/          音频、摄像头、显示及测试媒体驱动
-main/hardware/         启明 WT9932P4C61-TINY 板级能力与初始化
-main/media/            摄像头 pipeline、像素转换和媒体策略
-main/platform/         存储、时间、日志和内存策略
-main/protocols/        HTTP、MQTT、RTC 和 TiRTC 适配
-main/services/         绑定、在线、呼叫、VoIP、AI、IPC 和 OTA
-main/ui/               LVGL 页面、布局和资源
-docs/                  上手指南和媒体架构
-tools/                 静态分析和媒体日志工具
-```
-
-UI 展示状态并分发动作，应用层编排生命周期，服务层实现业务，协议层持有连接，
-媒体层处理帧，驱动层持有硬件。硬件差异在板级层维护，不向业务层复制特殊分支。
-
-## License
-
-项目许可证见 [LICENSE](LICENSE)。SDK、组件、字体和其他第三方资源保留各自许可证；
-根目录 MIT 许可证不替代第三方授权条款。
+文件及地址以该次构建的 `build/flasher_args.json` 为准，退出监视器使用 `Ctrl+]`。
+源码、SDK 与验证记录见 [版本契约](VERSION.md) 和 [源码来源](SOURCE_PROVENANCE.md)；
+项目及第三方授权以 [LICENSE](LICENSE) 和各组件许可证为准。
