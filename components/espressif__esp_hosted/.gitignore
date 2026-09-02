@@ -1,0 +1,35 @@
+build
+dependencies.lock
+managed_components
+sdkconfig
+sdkconfig.old
+
+# This repository vendors only the host-side runtime needed by the P4 app.
+# Keep upstream documentation, examples, coprocessor sources and CI support
+# out of the application source release.
+/.gitlab/
+/docs/
+/examples/
+/slave/
+/tools/
+/.codespellrc
+/.gitlab-ci-override-idf-component.yml
+/.gitmodules
+/.idf_build_apps.toml
+/.pre-commit-config.yaml
+/CHECKSUMS.json
+/sdkconfig.ci.all_features_enabled
+/common/protobuf-c/.commit_docs.sh
+/common/protobuf-c/.git
+/common/protobuf-c/CONTRIBUTING.md
+/common/protobuf-c/ChangeLog
+/common/protobuf-c/Doxyfile.in
+/common/protobuf-c/DoxygenLayout.xml
+/common/protobuf-c/Makefile.am
+/common/protobuf-c/TODO
+/common/protobuf-c/autogen.sh
+/common/protobuf-c/build-cmake/
+/common/protobuf-c/configure.ac
+/common/protobuf-c/m4/
+/common/protobuf-c/protoc-c/
+/common/protobuf-c/t/
