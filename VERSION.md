@@ -3,10 +3,10 @@
 | 项目 | 内容 |
 | --- | --- |
 | 应用工程 | TiRTC WT9932P4C61-TINY Device App |
-| 应用版本 | `1.0.1`，启明独立板型补丁版本 |
-| 比较基线 | `esp32-p4-wt9932p4c61-tiny-device-app-v1.0.0` |
+| 应用版本 | `1.0.2`，启明独立板型维护版本 |
+| 比较基线 | `esp32-p4-wt9932p4c61-tiny-device-app-v1.0.1` |
 | 独立源码仓 | https://github.com/tangeai/tirtc-device-qiming |
-| 项目 Tag | `esp32-p4-wt9932p4c61-tiny-device-app-v1.0.1` |
+| 项目 Tag | `esp32-p4-wt9932p4c61-tiny-device-app-v1.0.2` |
 | 发布范围 | Git 提供源码；同版本 Release 提供应用 BIN、16 MiB 完整镜像、烧录说明和校验清单 |
 | 目标芯片 | ESP32-P4 |
 | 目标开发板 | WT9932P4C61-TINY / WT01P461-S1 |

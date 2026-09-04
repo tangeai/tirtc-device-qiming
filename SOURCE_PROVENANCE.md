@@ -1,15 +1,15 @@
 # 源码来源与公开边界
 
-本文记录启明 WT9932P4C61-TINY Device Monitor `1.0.1` 的源码、SDK、板级从机和验证边界。
+本文记录启明 WT9932P4C61-TINY Device Monitor `1.0.2` 的源码、SDK、板级从机和验证边界。
 
 ## 版本身份
 
 | 项目 | 内容 |
 | --- | --- |
 | 独立仓库 | https://github.com/tangeai/tirtc-device-qiming |
-| 应用版本 | `1.0.1` |
-| 比较基线 | `esp32-p4-wt9932p4c61-tiny-device-app-v1.0.0` |
-| 发布 Tag | `esp32-p4-wt9932p4c61-tiny-device-app-v1.0.1` |
+| 应用版本 | `1.0.2` |
+| 比较基线 | `esp32-p4-wt9932p4c61-tiny-device-app-v1.0.1` |
+| 发布 Tag | `esp32-p4-wt9932p4c61-tiny-device-app-v1.0.2` |
 | 目标板 | WT9932P4C61-TINY / WT01P461-S1 |
 | ESP-IDF | `5.5.4` |
 | 板级移植依据 | Wireless-Tag WT_BSP `a1ee353fee9dc4de56709c00d764edc7bbcd18b1` |
@@ -17,11 +17,11 @@
 正式源码身份由 annotated Tag 及其 peeled commit 确定：
 
 ```powershell
-git rev-parse esp32-p4-wt9932p4c61-tiny-device-app-v1.0.1
-git rev-parse "esp32-p4-wt9932p4c61-tiny-device-app-v1.0.1^{commit}"
+git rev-parse esp32-p4-wt9932p4c61-tiny-device-app-v1.0.2
+git rev-parse "esp32-p4-wt9932p4c61-tiny-device-app-v1.0.2^{commit}"
 ```
 
-`1.0.0` Tag 保持不动；`1.0.1` 是其后的启明板型补丁版本。
+`1.0.0` 和 `1.0.1` Tag 保持不动；`1.0.2` 修复发布后重复执行静态契约检查时的基线依赖。
 
 ## 公开范围
 

@@ -57,22 +57,19 @@ int main(void) { return run(0) || run(-1); }
 def main():
     OUTPUT.mkdir(parents=True, exist_ok=True)
     current = (ROOT / SOURCE).read_text(encoding="utf-8")
-    original = subprocess.check_output(["git", "show", f"HEAD:{SOURCE}"], cwd=ROOT, encoding="utf-8")
-    for label, source in (("current", current), ("original", original)):
-        generated = OUTPUT / f"{label}.c"
-        generated.write_text(HARNESS.replace("@BRANCH@", branch(source)), encoding="utf-8")
-        for version, modern in ((None, 0), (0x010300, 0), (0x010603, 1)):
-            exe = OUTPUT / f"{label}-{version or 0}"
-            command = ["wsl", "-d", "Ubuntu", "--", "gcc", "-std=c11", "-Wall", "-Wextra",
-                       "-Werror", f"-DMODERN_OWNER={modern}"]
-            if version:
-                command.append(f"-DESP_WIFI_REMOTE_VERSION={version}")
-            subprocess.run(command + [wsl_path(generated), "-o", wsl_path(exe)], check=True)
-            ret = subprocess.run(["wsl", "-d", "Ubuntu", "--", wsl_path(exe)]).returncode
-            expected = 1 if label == "original" and modern else 0
-            print(f"{label} remote={version or 'undefined'} result={ret} expected={expected}")
-            if ret != expected:
-                raise RuntimeError("RX ownership contract regression")
+    generated = OUTPUT / "current.c"
+    generated.write_text(HARNESS.replace("@BRANCH@", branch(current)), encoding="utf-8")
+    for version, modern in ((None, 0), (0x010300, 0), (0x010603, 1)):
+        exe = OUTPUT / f"current-{version or 0}"
+        command = ["wsl", "-d", "Ubuntu", "--", "gcc", "-std=c11", "-Wall", "-Wextra",
+                   "-Werror", f"-DMODERN_OWNER={modern}"]
+        if version:
+            command.append(f"-DESP_WIFI_REMOTE_VERSION={version}")
+        subprocess.run(command + [wsl_path(generated), "-o", wsl_path(exe)], check=True)
+        ret = subprocess.run(["wsl", "-d", "Ubuntu", "--", wsl_path(exe)]).returncode
+        print(f"current remote={version or 'undefined'} result={ret} expected=0")
+        if ret != 0:
+            raise RuntimeError("RX ownership contract regression")
 
 
 if __name__ == "__main__":

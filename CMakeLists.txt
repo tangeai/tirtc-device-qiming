@@ -10,7 +10,7 @@ if(NOT "$ENV{ESP_IDF_VERSION}" STREQUAL "${IDF_VERSION_MAJOR}.${IDF_VERSION_MINO
         "otherwise Wi-Fi Remote cannot load the C61 configuration.")
 endif()
 
-set(PROJECT_VER "1.0.1")
+set(PROJECT_VER "1.0.2")
 project(tirtc_esp32p4_wt9932p4c61_tiny_device_app)
 
 if(NOT CONFIG_IDF_TARGET_ESP32P4 OR
