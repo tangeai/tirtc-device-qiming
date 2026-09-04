@@ -1,13 +1,19 @@
 #include "app_memory_policy.h"
 
 #include <limits.h>
+#include <stdint.h>
 #include <string.h>
 
+#include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
 
 static portMUX_TYPE s_memory_lock = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t s_psram_alloc_failures;
+static uint32_t s_alloc_failures;
+static size_t s_last_failed_size;
+static uint32_t s_last_failed_caps;
+static uintptr_t s_last_failed_function;
 
 _Static_assert(APP_MEMORY_INTERNAL_FREE_CRITICAL_BYTES <
                    APP_MEMORY_INTERNAL_FREE_WARNING_BYTES,
@@ -33,6 +39,21 @@ static void app_memory_note_psram_failure(void)
     taskENTER_CRITICAL(&s_memory_lock);
     s_psram_alloc_failures++;
     taskEXIT_CRITICAL(&s_memory_lock);
+}
+
+static void IRAM_ATTR app_memory_alloc_failed_hook(size_t size,
+                                                   uint32_t caps,
+                                                   const char *function_name)
+{
+    __atomic_fetch_add(&s_alloc_failures, 1U, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_last_failed_size, size, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_last_failed_caps, caps, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_last_failed_function, (uintptr_t)function_name, __ATOMIC_RELAXED);
+}
+
+esp_err_t app_memory_policy_init(void)
+{
+    return heap_caps_register_failed_alloc_callback(app_memory_alloc_failed_hook);
 }
 
 void *app_memory_alloc_psram(size_t size)
@@ -123,6 +144,14 @@ void app_memory_get_snapshot(app_memory_snapshot_t *snapshot)
     taskENTER_CRITICAL(&s_memory_lock);
     snapshot->psram_alloc_failures = s_psram_alloc_failures;
     taskEXIT_CRITICAL(&s_memory_lock);
+    snapshot->alloc_failures =
+        __atomic_load_n(&s_alloc_failures, __ATOMIC_RELAXED);
+    snapshot->last_failed_size =
+        __atomic_load_n(&s_last_failed_size, __ATOMIC_RELAXED);
+    snapshot->last_failed_caps =
+        __atomic_load_n(&s_last_failed_caps, __ATOMIC_RELAXED);
+    snapshot->last_failed_function = (const char *)
+        __atomic_load_n(&s_last_failed_function, __ATOMIC_RELAXED);
 }
 
 app_memory_health_t app_memory_classify(const app_memory_snapshot_t *snapshot)

@@ -8,8 +8,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/task.h"
+#include "lwip/etharp.h"
 #include "lwip/inet.h"
+#include "lwip/ip4.h"
+#include "lwip/netif.h"
 #include "lwip/sockets.h"
+#include "lwip/tcpip.h"
 
 #include "app_memory_policy.h"
 #include "app_task_affinity.h"
@@ -20,6 +24,7 @@
 #define HOSTED_UDP_DIAG_SEQUENCE_CAPACITY  (256U * 1024U)
 #define HOSTED_UDP_DIAG_SEEN_BYTES         (HOSTED_UDP_DIAG_SEQUENCE_CAPACITY / 8U)
 #define HOSTED_UDP_DIAG_LONG_GAP_US        250000ULL
+#define HOSTED_UDP_DIAG_ECHO_RETRY_US      20000ULL
 #define HOSTED_UDP_DIAG_TASK_STACK         (6U * 1024U)
 #define HOSTED_UDP_DIAG_TASK_PRIORITY      17U
 
@@ -66,12 +71,88 @@ static void hosted_udp_diag_update_missing_locked(void)
         (uint32_t)(span - s_stats.unique_packets) : 0U;
 }
 
+static bool hosted_udp_diag_is_transient_send_error(int error)
+{
+    return error == ENOMEM || error == ENOBUFS || error == EAGAIN ||
+           error == EWOULDBLOCK;
+}
+
+static bool hosted_udp_diag_peer_arp_is_resolved(const struct sockaddr_in *peer)
+{
+    ip4_addr_t destination = {.addr = peer->sin_addr.s_addr};
+    ip4_addr_t next_hop = destination;
+    struct eth_addr *ethernet_address = NULL;
+    const ip4_addr_t *resolved_ip = NULL;
+    bool resolved = false;
+
+    LOCK_TCPIP_CORE();
+    struct netif *netif = ip4_route(&destination);
+    if (netif != NULL) {
+        if (!ip4_addr_netcmp(&destination, netif_ip4_addr(netif),
+                             netif_ip4_netmask(netif)) &&
+            !ip4_addr_isany_val(*netif_ip4_gw(netif))) {
+            next_hop = *netif_ip4_gw(netif);
+        }
+        resolved = etharp_find_addr(netif, &next_hop, &ethernet_address,
+                                    &resolved_ip) >= 0;
+    }
+    UNLOCK_TCPIP_CORE();
+    return resolved;
+}
+
+static ssize_t hosted_udp_diag_echo_send(int sock,
+                                         const uint8_t *packet,
+                                         size_t packet_size,
+                                         const struct sockaddr_in *peer,
+                                         socklen_t peer_len,
+                                         uint32_t *retry_attempts,
+                                         uint32_t *wait_us,
+                                         int *last_error,
+                                         bool *saw_enomem,
+                                         bool *saw_unresolved_arp)
+{
+    const uint64_t start_us = (uint64_t)esp_timer_get_time();
+    ssize_t sent = -1;
+    uint32_t retries = 0U;
+    int error = 0;
+
+    do {
+        sent = sendto(sock, packet, packet_size, 0,
+                      (const struct sockaddr *)peer, peer_len);
+        if (sent == (ssize_t)packet_size) {
+            error = 0;
+            break;
+        }
+
+        error = sent < 0 ? errno : EIO;
+        if (error == ENOMEM && !*saw_enomem) {
+            *saw_enomem = true;
+            *saw_unresolved_arp = !hosted_udp_diag_peer_arp_is_resolved(peer);
+        }
+        const uint64_t elapsed_us = (uint64_t)esp_timer_get_time() - start_us;
+        if (!hosted_udp_diag_is_transient_send_error(error) ||
+            elapsed_us >= HOSTED_UDP_DIAG_ECHO_RETRY_US) {
+            break;
+        }
+
+        retries++;
+        vTaskDelay(pdMS_TO_TICKS(1));
+    } while (true);
+
+    const uint64_t elapsed_us = (uint64_t)esp_timer_get_time() - start_us;
+    *retry_attempts = retries;
+    *wait_us = elapsed_us > UINT32_MAX ? UINT32_MAX : (uint32_t)elapsed_us;
+    *last_error = error;
+    return sent;
+}
+
 static void hosted_udp_diag_task(void *arg)
 {
     const uint16_t port = (uint16_t)(uintptr_t)arg;
     uint8_t packet[HOSTED_UDP_DIAG_PACKET_BYTES];
     int sock = -1;
     int task_error = 0;
+    const bool echo = s_stats.echo_enabled;
     uint64_t start_us = (uint64_t)esp_timer_get_time();
     uint64_t previous_rx_us = 0ULL;
     uint64_t last_rx_us = 0ULL;
@@ -87,6 +168,12 @@ static void hosted_udp_diag_task(void *arg)
         .tv_usec = 200000,
     };
     (void)setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    const struct timeval send_timeout = {.tv_sec = 0, .tv_usec = 20000};
+    if (echo && setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO,
+                           &send_timeout, sizeof(send_timeout)) != 0) {
+        task_error = errno;
+        goto done;
+    }
 
     const struct sockaddr_in listen_addr = {
         .sin_family = AF_INET,
@@ -102,8 +189,17 @@ static void hosted_udp_diag_task(void *arg)
     s_stats.running = true;
     taskEXIT_CRITICAL(&s_lock);
 
-    while (!s_stop_requested) {
-        const ssize_t received = recvfrom(sock, packet, sizeof(packet), 0, NULL, NULL);
+    while (true) {
+        taskENTER_CRITICAL(&s_lock);
+        const bool stop_requested = s_stop_requested;
+        taskEXIT_CRITICAL(&s_lock);
+        if (stop_requested) {
+            break;
+        }
+        struct sockaddr_in peer = {0};
+        socklen_t peer_len = sizeof(peer);
+        const ssize_t received = recvfrom(sock, packet, sizeof(packet), 0,
+                                         (struct sockaddr *)&peer, &peer_len);
         if (received < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 continue;
@@ -161,6 +257,40 @@ static void hosted_udp_diag_task(void *arg)
 
         previous_rx_us = now_us;
         last_rx_us = now_us;
+        if (echo) {
+            /* Echo only this diagnostic's validated datagrams. No media path. */
+            uint32_t retry_attempts = 0U;
+            uint32_t wait_us = 0U;
+            int send_error = 0;
+            bool saw_enomem = false;
+            bool saw_unresolved_arp = false;
+            const ssize_t sent = hosted_udp_diag_echo_send(
+                sock, packet, (size_t)received, &peer, peer_len,
+                &retry_attempts, &wait_us, &send_error,
+                &saw_enomem, &saw_unresolved_arp);
+            taskENTER_CRITICAL(&s_lock);
+            s_stats.echo_retry_attempts += retry_attempts;
+            if (saw_enomem) {
+                s_stats.echo_enomem_packets++;
+            }
+            if (saw_unresolved_arp) {
+                s_stats.echo_arp_unresolved_packets++;
+            }
+            if (wait_us > s_stats.echo_max_wait_us) {
+                s_stats.echo_max_wait_us = wait_us;
+            }
+            if (sent == received) {
+                s_stats.echo_sent++;
+                if (retry_attempts > 0U) {
+                    s_stats.echo_recovered++;
+                }
+            } else {
+                s_stats.echo_errors++;
+                s_stats.echo_unrecovered++;
+                s_stats.last_error = send_error;
+            }
+            taskEXIT_CRITICAL(&s_lock);
+        }
     }
 
 done:
@@ -185,10 +315,10 @@ done:
     s_task = NULL;
     taskEXIT_CRITICAL(&s_lock);
     heap_caps_free(seen_sequences);
-    vTaskDelete(NULL);
+    vTaskDeleteWithCaps(NULL);
 }
 
-esp_err_t hosted_udp_diag_start(uint16_t port)
+static esp_err_t hosted_udp_diag_start_mode(uint16_t port, bool echo)
 {
     if (port == 0U) {
         port = HOSTED_UDP_DIAG_DEFAULT_PORT;
@@ -201,6 +331,7 @@ esp_err_t hosted_udp_diag_start(uint16_t port)
     }
     memset(&s_stats, 0, sizeof(s_stats));
     s_stats.port = port;
+    s_stats.echo_enabled = echo;
     s_stats.last_receive_age_ms = UINT32_MAX;
     s_stop_requested = false;
     s_last_rx_us = 0ULL;
@@ -229,6 +360,16 @@ esp_err_t hosted_udp_diag_start(uint16_t port)
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
+}
+
+esp_err_t hosted_udp_diag_start(uint16_t port)
+{
+    return hosted_udp_diag_start_mode(port, false);
+}
+
+esp_err_t hosted_udp_diag_start_echo(uint16_t port)
+{
+    return hosted_udp_diag_start_mode(port, true);
 }
 
 esp_err_t hosted_udp_diag_stop(void)

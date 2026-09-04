@@ -69,6 +69,20 @@ typedef struct {
     uint32_t conversion_swap_max_us;
     uint32_t discontinuities;
     uint32_t input_overflows;
+    /* Per-start timing counters, independent of periodic log-window resets.
+     * Presentation here means handoff to the display, not LCD DMA completion. */
+    uint32_t receive_gap_max_us;
+    uint32_t present_gap_max_us;
+    uint32_t receive_gap_250ms;
+    uint32_t present_gap_250ms;
+    uint32_t receive_gap_1s;
+    uint32_t present_gap_1s;
+    uint32_t receive_age_us;
+    uint32_t present_age_us;
+    uint64_t decode_time_us;
+    uint32_t decode_max_us;
+    uint8_t playout_fps;
+    bool adaptive_playout;
     uint32_t latest_sequence;
     uint32_t queue_depth;
     uint32_t conversion_queue_depth;

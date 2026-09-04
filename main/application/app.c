@@ -3968,6 +3968,7 @@ esp_err_t app_init(void)
 	display_actions_t display_actions = {0};
 	ota_config_t ota_config = app_make_ota_config();
 
+	ESP_RETURN_ON_ERROR(app_memory_policy_init(), TAG, "memory policy init failed");
 	app_ui_configure_display_actions(&display_actions);
 
 	ESP_LOGI(TAG, "system init start");

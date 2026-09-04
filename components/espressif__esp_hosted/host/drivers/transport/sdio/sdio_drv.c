@@ -1797,10 +1797,24 @@ static void sdio_process_rx_task(void const* pvParameters)
 						buf_handle->payload,
 						buf_handle->priv_buffer_handle,
 						buf_handle->payload_len);
+					/* wifi-remote >= 1.3.1 consumes RX ownership on errors
+					 * too, including packets arriving before RX registration.
+					 * Match the copied-payload path below; never free twice. */
+#ifndef ESP_WIFI_REMOTE_VERSION
 					if (unlikely(ret)) {
 						H_FREE_PTR_WITH_FUNC(buf_handle->free_buf_handle,
 							buf_handle->priv_buffer_handle);
 					}
+#else
+#if ESP_WIFI_REMOTE_VERSION < ESP_WIFI_REMOTE_VERSION_VAL(1,3,1)
+					if (unlikely(ret)) {
+						H_FREE_PTR_WITH_FUNC(buf_handle->free_buf_handle,
+							buf_handle->priv_buffer_handle);
+					}
+#else
+					(void)ret;
+#endif
+#endif
 					continue;
 				}
 

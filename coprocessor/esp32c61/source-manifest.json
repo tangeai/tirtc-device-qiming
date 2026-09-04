@@ -1,0 +1,59 @@
+{
+  "schema": 1,
+  "upstream": {
+    "component": "espressif/esp_hosted",
+    "version": "2.12.11",
+    "example": "slave",
+    "esp_idf": "5.5.4",
+    "source_command": "idf.py create-project-from-example espressif/esp_hosted=2.12.11:slave",
+    "sha256": {
+      "main/CMakeLists.txt": "f3e9bafbe97467e84f4be40ccd847bfb6a459c7a862ea133e7292d419338e0c8",
+      "main/esp_hosted_coprocessor.c": "67184c946fa30fede760ea5cf2f5d5e69d08e7684a8ccebedea26f12c772b3d2",
+      "main/slave_control.c": "d6e1825966025491076b8d8b077eff62e326610d556953c84977d4c3c422d171",
+      "main/slave_wifi_std.c": "33cf0c7532ca878e1acd7f612c7fd6301141525916c3f1d56b3b185b1faed966",
+      "sdkconfig.defaults": "e17d518f2b16d0f7749f7eb3f0677633e36046c801ad9a360f22adbdc81d07d0",
+      "sdkconfig.defaults.esp32c61": "8d4f56852a0f3801590511b9a3908799de232ceef34776adc16c6072428a48e2"
+    }
+  },
+  "source_edits": [
+    {
+      "path": "main/Kconfig.projbuild",
+      "old": "\t\t\trange BTDM_CTRL_HCI_UART_NO BTDM_CTRL_HCI_UART_NO",
+      "new": "\t\t\t# ESP32-only range omitted in this ESP32-C61 production build."
+    },
+    {
+      "path": "main/Kconfig.projbuild",
+      "old": "\t\t\trange BTDM_CTRL_HCI_UART_BAUDRATE BTDM_CTRL_HCI_UART_BAUDRATE",
+      "new": "\t\t\t# ESP32-only range omitted in this ESP32-C61 production build."
+    },
+    {
+      "path": "main/Kconfig.projbuild",
+      "old": "\tconfig ESP_WIFI_DPP_SUPPORT\n\t\tdepends on ESP_HOSTED_CP_WIFI\n\t\tbool \"Enable Wi-Fi Easy Connect (DPP)\"\n\t\tdefault n\n\t\thelp\n\t\t\tEnable Wi-Fi Easy Connect (DPP) support\n",
+      "new": "\t# ESP_WIFI_DPP_SUPPORT is provided by ESP-IDF's esp_wifi Kconfig.\n"
+    }
+  ],
+  "overlay_sha256": {
+    "CMakeLists.txt": "396a02f36d5388306a897ef7c17a4f2e398ba9c4c68e43e445aa85801686a982",
+    "main/CMakeLists.txt": "eb3191a6be59a0cb86b4b4bba9e4cc4dc928b8d13e62e1c5874aa5c208f0541e",
+    "main/c61_rx_probe.c": "fd16912bd2d251cd3e6d8df8833b9134c8160f2a63c1b59d0108d0e3a0b062d4",
+    "main/c61_rx_probe.h": "d90a25507c53a15d1af1555df9a6217c71ba89f0c64ee05a802ae95c219bf698",
+    "main/c61_sequence_window_test.c": "7490374e76fca45640f60a1180ea5d7fadd49c57962d463949ac7e449f6d1e55",
+    "main/c61_sequence_window.h": "e9f8a77904eb7d0819146785794948bd38207c09360f724a711013cbc8e45e2c",
+    "main/c61_udp_diag.h": "8b8975cea21c3dac11e8604a9fb2b340f9edeb03b9f4d6d85c2b5858ec87e89f",
+    "main/esp_hosted_coprocessor.c": "5a9a6ffde935eb0e7bfbcc78d781608cdbe3710acf5e725dcb95d15bb2f806cb",
+    "main/idf_component.yml": "5fb1bfb9e35bf717cfe038145561fdb260639ecd9d868bcf3a3d22cc0a7b54a4",
+    "main/slave_control.c": "a13e70c8d68965c29e098af122f0465d495f628160158a314e4ea2607f09648c",
+    "main/slave_wifi_std.c": "61669e4732c367efa34f5329da5530f5c1412f7d3ace58a2507e434d66fc2ebf",
+    "sdkconfig.defaults": "52a291b348811f5d931a8fd6623e2bc8d7cc71f5ca96de86df93ebaefaa95291",
+    "sdkconfig.defaults.esp32c61": "e027bffc2eb984cb924eefad275626ba22e642ad0ad7f39238afd5158a0963f0"
+  },
+  "prepared_sha256": {
+    "main/Kconfig.projbuild": "723f83f22f81297abd6d59620aebdb32909dbf2cd96dd1c9b3b3e814ca80b262"
+  },
+  "validated_reference": {
+    "firmware": "network_adapter.bin",
+    "size": 967840,
+    "sha256": "f76daa4897c5e5eb9cd1b58eae528799fdc6c86acdd222f0d33d194c1b3e1120",
+    "elf_sha256": "aba4e3849b3fdb951575a031c71677c9023f574cc0c4b8991991fdcbd9ecc0d2"
+  }
+}

@@ -264,6 +264,12 @@ typedef struct {
     uint32_t receive_gap_window_max_us;
     int64_t last_presented_at_us;
     uint32_t present_gap_window_max_us;
+    uint32_t receive_gap_max_us;
+    uint32_t present_gap_max_us;
+    uint32_t receive_gap_250ms;
+    uint32_t present_gap_250ms;
+    uint32_t receive_gap_1s;
+    uint32_t present_gap_1s;
     uint32_t decode_process_calls;
     uint64_t decode_time_us;
     uint32_t decode_access_units;
@@ -493,6 +499,11 @@ static void call_video_note_received(int64_t received_at_us, uint32_t pts)
         if (receive_gap_us > s_renderer.receive_gap_window_max_us) {
             s_renderer.receive_gap_window_max_us = receive_gap_us;
         }
+        if (receive_gap_us > s_renderer.receive_gap_max_us) {
+            s_renderer.receive_gap_max_us = receive_gap_us;
+        }
+        s_renderer.receive_gap_250ms += receive_gap_us >= 250000U;
+        s_renderer.receive_gap_1s += receive_gap_us >= 1000000U;
     }
     mjpeg_rate_changed = call_video_update_mjpeg_playout_rate_locked(
         pts,
@@ -3485,6 +3496,12 @@ esp_err_t call_video_renderer_start_with_config(
     s_renderer.presented_pts = 0;
     s_renderer.last_received_at_us = 0;
     s_renderer.receive_gap_window_max_us = 0;
+    s_renderer.receive_gap_max_us = 0;
+    s_renderer.present_gap_max_us = 0;
+    s_renderer.receive_gap_250ms = 0;
+    s_renderer.present_gap_250ms = 0;
+    s_renderer.receive_gap_1s = 0;
+    s_renderer.present_gap_1s = 0;
     s_renderer.adaptive_playout_generation = 0U;
     s_renderer.adaptive_playout_generation_seen = 0U;
     s_renderer.adaptive_playout_depth = CALL_VIDEO_ADAPTIVE_PLAYOUT_DEPTH;
@@ -4207,6 +4224,11 @@ esp_err_t call_video_renderer_present_next_rgb565(const uint16_t **pixels,
         if (gap_us > s_renderer.present_gap_window_max_us) {
             s_renderer.present_gap_window_max_us = gap_us;
         }
+        if (gap_us > s_renderer.present_gap_max_us) {
+            s_renderer.present_gap_max_us = gap_us;
+        }
+        s_renderer.present_gap_250ms += gap_us >= 250000U;
+        s_renderer.present_gap_1s += gap_us >= 1000000U;
     }
     s_renderer.last_presented_at_us = presented_at_us;
     s_renderer.present_copy_time_us += handoff_elapsed_us;
@@ -4243,6 +4265,7 @@ void call_video_renderer_get_stats(call_video_renderer_stats_t *stats)
      * invoking the media callback after the input queue begins rejecting it. */
     (void)call_video_renderer_detect_decode_fault(esp_timer_get_time());
     memset(stats, 0, sizeof(*stats));
+    const int64_t now_us = esp_timer_get_time();
     taskENTER_CRITICAL(&s_renderer.lock);
     stats->running = s_renderer.running;
     stats->waiting_for_key_frame = s_renderer.waiting_for_key_frame;
@@ -4272,6 +4295,22 @@ void call_video_renderer_get_stats(call_video_renderer_stats_t *stats)
     stats->conversion_swap_max_us = s_renderer.convert_swap_max_us;
     stats->discontinuities = s_renderer.discontinuities;
     stats->input_overflows = s_renderer.input_overflows;
+    stats->receive_gap_max_us = s_renderer.receive_gap_max_us;
+    stats->present_gap_max_us = s_renderer.present_gap_max_us;
+    stats->receive_gap_250ms = s_renderer.receive_gap_250ms;
+    stats->present_gap_250ms = s_renderer.present_gap_250ms;
+    stats->receive_gap_1s = s_renderer.receive_gap_1s;
+    stats->present_gap_1s = s_renderer.present_gap_1s;
+    if (s_renderer.running && s_renderer.last_received_at_us > 0) {
+        stats->receive_age_us = call_video_elapsed_us(s_renderer.last_received_at_us, now_us);
+    }
+    if (s_renderer.running && s_renderer.last_presented_at_us > 0) {
+        stats->present_age_us = call_video_elapsed_us(s_renderer.last_presented_at_us, now_us);
+    }
+    stats->decode_time_us = s_renderer.decode_access_unit_time_us;
+    stats->decode_max_us = s_renderer.decode_access_unit_max_us;
+    stats->playout_fps = s_renderer.playout_fps;
+    stats->adaptive_playout = s_renderer.adaptive_playout_until_us > now_us;
     stats->latest_sequence = s_renderer.latest_sequence;
     taskEXIT_CRITICAL(&s_renderer.lock);
     stats->queue_depth = call_video_input_queue_depth();

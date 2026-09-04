@@ -24,8 +24,18 @@ typedef struct {
     uint32_t elapsed_ms;
     uint32_t last_receive_age_ms;
     int last_error;
+    bool echo_enabled;
+    uint32_t echo_sent;
+    uint32_t echo_errors;
+    uint32_t echo_retry_attempts;
+    uint32_t echo_recovered;
+    uint32_t echo_unrecovered;
+    uint32_t echo_max_wait_us;
+    uint32_t echo_enomem_packets;
+    uint32_t echo_arp_unresolved_packets;
 } hosted_udp_diag_stats_t;
 
 esp_err_t hosted_udp_diag_start(uint16_t port);
+esp_err_t hosted_udp_diag_start_echo(uint16_t port);
 esp_err_t hosted_udp_diag_stop(void);
 void hosted_udp_diag_get_stats(hosted_udp_diag_stats_t *stats);

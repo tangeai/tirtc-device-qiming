@@ -13,6 +13,7 @@
 #include "esp_hosted_transport_init.h"
 #include "esp_hosted_transport_config.h"
 #include "esp_hosted_host_fw_ver.h"
+#include "esp_hosted.h"
 #include "stats.h"
 #include "esp_hosted_log.h"
 #include "serial_drv.h"
@@ -50,6 +51,11 @@ transport_channel_t *chan_arr[ESP_MAX_IF];
 volatile uint8_t wifi_tx_throttling;
 void *bus_handle = NULL;
 
+static esp_hosted_sta_tx_stats_t s_sta_tx_stats;
+
+#define STA_TX_STAT_INC(field) \
+	__atomic_fetch_add(&s_sta_tx_stats.field, 1U, __ATOMIC_RELAXED)
+
 
 static volatile uint8_t transport_state = TRANSPORT_INACTIVE;
 
@@ -79,6 +85,21 @@ uint8_t is_transport_rx_ready(void)
 uint8_t is_transport_tx_ready(void)
 {
 	return (transport_state >= TRANSPORT_TX_ACTIVE);
+}
+
+int esp_hosted_get_sta_tx_stats(esp_hosted_sta_tx_stats_t *stats)
+{
+	if (!stats) {
+		return ESP_ERR_INVALID_ARG;
+	}
+
+	stats->submitted = __atomic_load_n(&s_sta_tx_stats.submitted, __ATOMIC_RELAXED);
+	stats->not_ready = __atomic_load_n(&s_sta_tx_stats.not_ready, __ATOMIC_RELAXED);
+	stats->flow_controlled = __atomic_load_n(&s_sta_tx_stats.flow_controlled, __ATOMIC_RELAXED);
+	stats->mempool_empty = __atomic_load_n(&s_sta_tx_stats.mempool_empty, __ATOMIC_RELAXED);
+	stats->transport_failed = __atomic_load_n(&s_sta_tx_stats.transport_failed, __ATOMIC_RELAXED);
+	stats->flow_control_active = wifi_tx_throttling;
+	return ESP_OK;
 }
 
 static void transport_driver_event_handler(uint8_t event)
@@ -345,6 +366,7 @@ static esp_err_t transport_drv_sta_tx(void *h, void *buffer, size_t len)
 
 	/* Transport state check */
 	if (!is_transport_tx_ready() || !chan_arr[ESP_STA_IF]) {
+		STA_TX_STAT_INC(not_ready);
 		ESP_LOGE(TAG, "Transport TX not ready or STA channel is not available, drop pkt");
 #if defined(ESP_ERR_ESP_NETIF_TX_FAILED)
 		return ESP_ERR_ESP_NETIF_TX_FAILED;
@@ -354,6 +376,7 @@ static esp_err_t transport_drv_sta_tx(void *h, void *buffer, size_t len)
 	}
 
 	if (unlikely(wifi_tx_throttling)) {
+		STA_TX_STAT_INC(flow_controlled);
 	#if ESP_PKT_STATS
 		pkt_stats.sta_tx_flowctrl_drop++;
 	#endif
@@ -371,6 +394,7 @@ static esp_err_t transport_drv_sta_tx(void *h, void *buffer, size_t len)
 	/*  Prepare transport buffer directly consumable */
 	copy_buff = mempool_alloc(chan_arr[ESP_STA_IF]->memp, MAX_TRANSPORT_BUFFER_SIZE, true);
 	if (!copy_buff) {
+		STA_TX_STAT_INC(mempool_empty);
 		ESP_LOGW(TAG, "STA TX: mempool_alloc failed, dropping pkt (len=%u)", len);
 #if defined(ESP_ERR_ESP_NETIF_TX_FAILED)
 		return ESP_ERR_ESP_NETIF_TX_FAILED;
@@ -380,7 +404,14 @@ static esp_err_t transport_drv_sta_tx(void *h, void *buffer, size_t len)
 	}
 	g_h.funcs->_h_memcpy(copy_buff+H_ESP_PAYLOAD_HEADER_OFFSET, buffer, len);
 
-	return esp_hosted_tx(ESP_STA_IF, 0, copy_buff, len, H_BUFF_ZEROCOPY, copy_buff, transport_sta_free_cb, 0);
+	int ret = esp_hosted_tx(ESP_STA_IF, 0, copy_buff, len, H_BUFF_ZEROCOPY,
+			copy_buff, transport_sta_free_cb, 0);
+	if (ret == ESP_OK) {
+		STA_TX_STAT_INC(submitted);
+	} else {
+		STA_TX_STAT_INC(transport_failed);
+	}
+	return ret;
 }
 
 static esp_err_t transport_drv_ap_tx(void *h, void *buffer, size_t len)

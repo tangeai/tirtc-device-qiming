@@ -45,6 +45,8 @@ static const char *TAG = "serial_call_cli";
 #endif
 
 static TaskHandle_t s_serial_call_cli_task;
+static bool s_c61_probe_registered;
+#define C61_PROBE_RPC_ID 0xc610d001U
 
 static const char *serial_call_cli_transport_name(void)
 {
@@ -66,7 +68,7 @@ static int serial_call_cli_read(void *buffer, size_t size, TickType_t ticks_to_w
 
 static void serial_call_cli_writef(const char *format, ...)
 {
-    char line[256];
+    char line[512];
     va_list args;
 
     va_start(args, format);
@@ -82,11 +84,23 @@ static void serial_call_cli_writef(const char *format, ...)
     line[used++] = '\r';
     line[used++] = '\n';
 
-    /* ESP_LOG uses the console stdio stream. Keep AT replies on the same
-     * serialization path so a concurrent log cannot split one response. */
+    /* Keep one AT line serialized with ESP_LOG, but do not assume that the
+     * non-blocking USB-JTAG VFS accepted the whole line in one write. */
     flockfile(stdout);
-    (void)fwrite(line, 1U, used, stdout);
-    (void)fflush(stdout);
+    size_t offset = 0U;
+    while (offset < used) {
+#if SERIAL_CALL_CLI_USE_USB_SERIAL_JTAG
+        const int written = usb_serial_jtag_write_bytes(
+            line + offset, used - offset, pdMS_TO_TICKS(100));
+#else
+        const int written = uart_write_bytes(
+            CONFIG_ESP_CONSOLE_UART_NUM, line + offset, used - offset);
+#endif
+        if (written <= 0) {
+            break;
+        }
+        offset += (size_t)written;
+    }
     funlockfile(stdout);
 }
 
@@ -100,21 +114,26 @@ static void serial_call_cli_print_help(void)
     serial_call_cli_writef("+HELP:AT+VIDEO=ON|OFF|AT+MEDIA?");
     serial_call_cli_writef("+HELP:AT+WIFI=<ssid>,<password>");
     serial_call_cli_writef("+HELP:AT+MEM?|AT+AUDIO?");
-    serial_call_cli_writef("+HELP:AT+HOSTED?|AT+WIFISTATS|AT+UDPRX=START|STOP|AT+UDPRX?");
+    serial_call_cli_writef("+HELP:AT+HOSTED?|AT+WIFILINK?|AT+WIFISTATS|AT+UDPRX=START|ECHO|STOP|AT+UDPRX?");
     serial_call_cli_writef("+HELP:AT+CPOTA=<http-url>");
+    serial_call_cli_writef("+HELP:AT+C61=INFO|STATS|RESET|SINK=0|SINK=1|PROMISC=0|PROMISC=1|PHY=N20|PHY=AX20 (lab firmware)");
     serial_call_cli_writef("OK");
 }
 
 static void serial_call_cli_print_hosted(void)
 {
     esp_hosted_coprocessor_fwver_t version = {0};
+    esp_hosted_sta_tx_stats_t tx_stats = {0};
+    app_memory_snapshot_t memory = {0};
     uint32_t chip_id = 0U;
     char target[24] = {0};
     const int version_ret = esp_hosted_get_coprocessor_fwversion(&version);
     const int info_ret = esp_hosted_get_cp_info(&chip_id, target, sizeof(target));
+    const int tx_stats_ret = esp_hosted_get_sta_tx_stats(&tx_stats);
+    app_memory_get_snapshot(&memory);
 
     serial_call_cli_writef(
-        "+HOSTED:host=%u.%u.%u,cp=%u.%u.%u,chip=%u,target=%s,version_ret=%d,info_ret=%d,cp_udp=%d,cp_missing=%d,cp_forward_max_us=%d,sdio_q=20/20,wifi_rx=%d/%d,ba_rx=%d",
+        "+HOSTED:host=%u.%u.%u,cp=%u.%u.%u,chip=%u,target=%s,vr=%d,ir=%d,txr=%d,tx_ok=%lu,tx_nr=%lu,tx_fc=%lu/%u,tx_mp=%lu,tx_q=%lu,af=%lu",
         (unsigned)ESP_HOSTED_VERSION_MAJOR_1,
         (unsigned)ESP_HOSTED_VERSION_MINOR_1,
         (unsigned)ESP_HOSTED_VERSION_PATCH_1,
@@ -125,12 +144,59 @@ static void serial_call_cli_print_hosted(void)
         target[0] != '\0' ? target : "-",
         version_ret,
         info_ret,
+        tx_stats_ret,
+        (unsigned long)tx_stats.submitted,
+        (unsigned long)tx_stats.not_ready,
+        (unsigned long)tx_stats.flow_controlled,
+        (unsigned)tx_stats.flow_control_active,
+        (unsigned long)tx_stats.mempool_empty,
+        (unsigned long)tx_stats.transport_failed,
+        (unsigned long)memory.alloc_failures);
+    serial_call_cli_writef(
+        "+HOSTEDCFG:cp_udp=%d,cp_missing=%d,cp_forward_max_us=%d,sdio_q=20/20,wifi_rx=%d/%d,ba_rx=%d",
         (int)version.revision,
         (int)version.prerelease,
         (int)version.build,
         CONFIG_WIFI_RMT_STATIC_RX_BUFFER_NUM,
         CONFIG_WIFI_RMT_DYNAMIC_RX_BUFFER_NUM,
         CONFIG_WIFI_RMT_RX_BA_WIN);
+    serial_call_cli_writef(
+        "+HOSTEDMEM:af=%lu,afs=%u,afc=0x%08lx,aff=%s",
+        (unsigned long)memory.alloc_failures,
+        (unsigned)memory.last_failed_size,
+        (unsigned long)memory.last_failed_caps,
+        memory.last_failed_function != NULL ? memory.last_failed_function : "-");
+    serial_call_cli_writef("OK");
+}
+
+static void serial_call_cli_c61_reply(uint32_t id, const uint8_t *data, size_t length, void *ctx)
+{
+    (void)id;
+    (void)ctx;
+    if (data != NULL && length > 0U && length < 240U) {
+        serial_call_cli_writef("%.*s", (int)length, (const char *)data);
+    }
+}
+
+static void serial_call_cli_print_wifi_link(void)
+{
+    wifi_ap_record_t ap = {0};
+    uint8_t protocols = 0U;
+    wifi_bandwidth_t bandwidth = WIFI_BW_HT20;
+    wifi_ps_type_t ps = WIFI_PS_NONE;
+    const esp_err_t ap_ret = esp_wifi_sta_get_ap_info(&ap);
+    const esp_err_t protocol_ret = esp_wifi_get_protocol(WIFI_IF_STA, &protocols);
+    const esp_err_t bandwidth_ret = esp_wifi_get_bandwidth(WIFI_IF_STA, &bandwidth);
+    const esp_err_t ps_ret = esp_wifi_get_ps(&ps);
+
+    /* Configuration and AP capability are not a negotiated PHY rate. */
+    serial_call_cli_writef(
+        "+WIFILINK:ap_ret=%d,bssid=%02x:%02x:%02x:%02x:%02x:%02x,ch=%u,rssi=%d,ap_n=%u,ap_ax=%u",
+        ap_ret, ap.bssid[0], ap.bssid[1], ap.bssid[2], ap.bssid[3], ap.bssid[4], ap.bssid[5],
+        ap.primary, ap.rssi, (unsigned)ap.phy_11n, (unsigned)ap.phy_11ax);
+    serial_call_cli_writef(
+        "+WIFICFG:protocol_ret=%d,protocols=0x%02x,bw_ret=%d,bw=%d,ps_ret=%d,ps=%d",
+        protocol_ret, protocols, bandwidth_ret, bandwidth, ps_ret, ps);
     serial_call_cli_writef("OK");
 }
 
@@ -142,26 +208,37 @@ static void serial_call_cli_print_udp_rx(void)
     hosted_udp_diag_get_stats(&stats);
     wifi_get_status(&wifi);
     serial_call_cli_writef(
-        "+UDPRX:run=%u,ip=%s,port=%u,packets=%u,unique=%u,bytes=%u,seq=%u-%u,missing=%u,dup=%u,reorder=%u,invalid=%u,overflow=%u,rxerr=%u,longgap=%u,maxgap_us=%u,elapsed_ms=%u,last_age_ms=%u,error=%d",
+        "+UDPRX:run=%u,ip=%s,port=%u,packets=%u,unique=%u,invalid=%u,overflow=%u,rxerr=%u,longgap=%u,error=%d,echo=%u,echo_sent=%u,echo_fail=%u,echo_unrecovered=%u,echo_nomem=%u,echo_arp=%u",
         stats.running ? 1U : 0U,
         wifi.ip_addr[0] != '\0' ? wifi.ip_addr : "-",
         (unsigned)stats.port,
         (unsigned)stats.packets,
         (unsigned)stats.unique_packets,
+        (unsigned)stats.invalid_packets,
+        (unsigned)stats.sequence_overflow_packets,
+        (unsigned)stats.receive_errors,
+        (unsigned)stats.long_gap_count,
+        stats.last_error, (unsigned)stats.echo_enabled,
+        (unsigned)stats.echo_sent, (unsigned)stats.echo_errors,
+        (unsigned)stats.echo_unrecovered,
+        (unsigned)stats.echo_enomem_packets,
+        (unsigned)stats.echo_arp_unresolved_packets);
+    serial_call_cli_writef(
+        "+UDPSEQ:bytes=%u,seq=%u-%u,missing=%u,dup=%u,reorder=%u,maxgap_us=%u,elapsed_ms=%u,last_age_ms=%u",
         (unsigned)stats.bytes,
         (unsigned)stats.first_sequence,
         (unsigned)stats.highest_sequence,
         (unsigned)stats.missing_packets,
         (unsigned)stats.duplicate_packets,
         (unsigned)stats.out_of_order_packets,
-        (unsigned)stats.invalid_packets,
-        (unsigned)stats.sequence_overflow_packets,
-        (unsigned)stats.receive_errors,
-        (unsigned)stats.long_gap_count,
         (unsigned)stats.max_interarrival_us,
         (unsigned)stats.elapsed_ms,
-        (unsigned)stats.last_receive_age_ms,
-        stats.last_error);
+        (unsigned)stats.last_receive_age_ms);
+    serial_call_cli_writef(
+        "+UDPECHO:retry=%u,recover=%u,max_us=%u",
+        (unsigned)stats.echo_retry_attempts,
+        (unsigned)stats.echo_recovered,
+        (unsigned)stats.echo_max_wait_us);
     serial_call_cli_writef("OK");
 }
 
@@ -233,7 +310,7 @@ static void serial_call_cli_print_memory(void)
 
     app_memory_get_snapshot(&memory);
     serial_call_cli_writef(
-        "+MEM:int=%u/%u/%u,dma=%u/%u/%u,ps=%u/%u/%u,tasks=%u,fail=%u,integrity=%u",
+        "+MEM:int=%u/%u/%u,dma=%u/%u/%u,ps=%u/%u/%u,tasks=%u,fail=%u,af=%lu,afs=%u,afc=0x%08lx,aff=%s,integrity=%u",
         (unsigned)memory.internal_free,
         (unsigned)memory.internal_largest,
         (unsigned)memory.internal_min_free,
@@ -245,6 +322,10 @@ static void serial_call_cli_print_memory(void)
         (unsigned)memory.psram_min_free,
         (unsigned)uxTaskGetNumberOfTasks(),
         (unsigned)memory.psram_alloc_failures,
+        (unsigned long)memory.alloc_failures,
+        (unsigned)memory.last_failed_size,
+        (unsigned long)memory.last_failed_caps,
+        memory.last_failed_function != NULL ? memory.last_failed_function : "-",
         heap_caps_check_integrity_all(false) ? 1U : 0U);
     serial_call_cli_writef("OK");
 }
@@ -340,6 +421,17 @@ static void serial_call_cli_print_media(void)
         (unsigned)renderer.conversion_failures,
         (unsigned)renderer.discontinuities,
         (unsigned)renderer.input_overflows);
+    serial_call_cli_writef(
+        "+VRX:src=%ux%u,bytes=%llu,gap_us=%u/%u,gap250=%u/%u,gap1s=%u/%u,age_us=%u/%u,dec_us=%llu/%u,cv_us=%llu/%u,pace=%u,adaptive=%u",
+        (unsigned)renderer.source_width, (unsigned)renderer.source_height,
+        (unsigned long long)renderer.received_bytes,
+        (unsigned)renderer.receive_gap_max_us, (unsigned)renderer.present_gap_max_us,
+        (unsigned)renderer.receive_gap_250ms, (unsigned)renderer.present_gap_250ms,
+        (unsigned)renderer.receive_gap_1s, (unsigned)renderer.present_gap_1s,
+        (unsigned)renderer.receive_age_us, (unsigned)renderer.present_age_us,
+        (unsigned long long)renderer.decode_time_us, (unsigned)renderer.decode_max_us,
+        (unsigned long long)renderer.conversion_time_us, (unsigned)renderer.conversion_max_us,
+        (unsigned)renderer.playout_fps, renderer.adaptive_playout ? 1U : 0U);
     serial_call_cli_writef("OK");
 }
 
@@ -385,12 +477,29 @@ static void serial_call_cli_process_line(const char *line)
         serial_call_cli_print_media();
     } else if (strcmp(line, "AT+HOSTED?") == 0) {
         serial_call_cli_print_hosted();
+    } else if (strcmp(line, "AT+WIFILINK?") == 0) {
+        serial_call_cli_print_wifi_link();
+    } else if (strncmp(line, "AT+C61=", 7U) == 0) {
+        if (!s_c61_probe_registered) {
+            ret = esp_hosted_register_custom_callback(C61_PROBE_RPC_ID,
+                                                       serial_call_cli_c61_reply, NULL);
+            s_c61_probe_registered = ret == ESP_OK;
+        }
+        if (s_c61_probe_registered) {
+            const char *command = line + 7U;
+            ret = esp_hosted_send_custom_data(C61_PROBE_RPC_ID,
+                                               (const uint8_t *)command, strlen(command));
+        }
+        serial_call_cli_writef("+C61RPC:ret=%d", ret);
     } else if (strcmp(line, "AT+WIFISTATS") == 0) {
         ret = esp_wifi_statis_dump(UINT32_MAX);
         serial_call_cli_writef("+WIFISTATS:ret=%s", esp_err_to_name(ret));
     } else if (strcmp(line, "AT+UDPRX=START") == 0) {
         ret = hosted_udp_diag_start(5005U);
         serial_call_cli_writef("+UDPRX:action=START,port=5005,ret=%s", esp_err_to_name(ret));
+    } else if (strcmp(line, "AT+UDPRX=ECHO") == 0) {
+        ret = hosted_udp_diag_start_echo(5005U);
+        serial_call_cli_writef("+UDPRX:action=ECHO,port=5005,ret=%s", esp_err_to_name(ret));
     } else if (strcmp(line, "AT+UDPRX=STOP") == 0) {
         ret = hosted_udp_diag_stop();
         serial_call_cli_writef("+UDPRX:action=STOP,ret=%s", esp_err_to_name(ret));

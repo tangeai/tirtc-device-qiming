@@ -176,7 +176,7 @@ static void hosted_coprocessor_ota_diag_task(void *arg)
     (void)arg;
     (void)hosted_coprocessor_ota_diag_run(s_ota_url);
     s_ota_task = NULL;
-    vTaskDelete(NULL);
+    vTaskDeleteWithCaps(NULL);
 }
 
 esp_err_t hosted_coprocessor_ota_diag_start(const char *url)

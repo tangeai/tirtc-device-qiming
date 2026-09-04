@@ -58,6 +58,29 @@ static const char *TAG = "wifi_mgr";
 #define WIFI_MAX_TX_POWER_QDBM 84
 #define WIFI_SCAN_TASK_PRIORITY 5
 #define WIFI_SCAN_TASK_CORE 1
+#define WIFI_C61_DYNAMIC_TX_BUFFER_NUM 4
+
+static void wifi_apply_coprocessor_memory_policy(wifi_init_config_t *config)
+{
+#if CONFIG_ESP_HOSTED_CP_TARGET_ESP32C61
+    /* wifi_remote's Kconfig uses HOST PSRAM to force static TX. These buffers
+     * actually live in the C61 (no PSRAM), where static buffers consume heap
+     * needed by burst RX / AMPDU reassembly. Allocate TX on demand and cap the
+     * in-flight set so full-duplex traffic cannot starve Wi-Fi RX allocations;
+     * P4 lwIP/PSRAM and aggregation remain unchanged.
+     * Apply on initial init AND Hosted recovery so reconnect cannot regress. */
+    config->tx_buf_type = 1;
+    config->static_tx_buf_num = 0;
+    config->dynamic_tx_buf_num = WIFI_C61_DYNAMIC_TX_BUFFER_NUM;
+    config->cache_tx_buf_num = 0;
+    ESP_LOGI(TAG, "C61 memory: rx=%d/%d tx=dynamic/%d ba=%d ampdu=%d/%d",
+             config->static_rx_buf_num, config->dynamic_rx_buf_num,
+             config->dynamic_tx_buf_num, config->rx_ba_win,
+             config->ampdu_rx_enable, config->ampdu_tx_enable);
+#else
+    (void)config;
+#endif
+}
 
 typedef enum {
     WIFI_HOSTED_RECOVERY_NONE = 0,
@@ -930,6 +953,7 @@ static esp_err_t wifi_recover_hosted_transport(wifi_hosted_recovery_reason_t rea
     }
 
     wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
+    wifi_apply_coprocessor_memory_policy(&init_cfg);
     ret = esp_wifi_init(&init_cfg);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "ESP-Hosted recovery esp_wifi_init failed: %s", esp_err_to_name(ret));
@@ -1698,6 +1722,7 @@ esp_err_t wifi_prepare(const wifi_driver_config_t *config)
                         "wifi sta netif create failed");
 
     wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
+    wifi_apply_coprocessor_memory_policy(&init_cfg);
     s_wifi_hosted_runtime_initialized = true;
     ESP_RETURN_ON_ERROR(esp_wifi_init(&init_cfg), TAG, "esp_wifi_init failed");
     (void)wifi_configure_hosted_heartbeat();

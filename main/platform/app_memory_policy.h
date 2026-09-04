@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "esp_err.h"
 #include "esp_heap_caps.h"
 
 /*
@@ -62,8 +63,13 @@ typedef struct {
     size_t psram_largest;
     size_t psram_min_free;
     uint32_t psram_alloc_failures;
+    uint32_t alloc_failures;
+    size_t last_failed_size;
+    uint32_t last_failed_caps;
+    const char *last_failed_function;
 } app_memory_snapshot_t;
 
+esp_err_t app_memory_policy_init(void);
 void *app_memory_alloc_psram(size_t size);
 void *app_memory_calloc_psram(size_t count, size_t size);
 void *app_memory_aligned_alloc_psram(size_t alignment, size_t size, uint32_t extra_caps);

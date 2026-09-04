@@ -33,6 +33,7 @@ static const char *TAG = "media_governor";
 #define MEDIA_GOVERNOR_AUTO_HEALTHY_BUFFER_PCT APP_MEDIA_AUTO_HEALTHY_BUFFER_PCT
 #define MEDIA_GOVERNOR_AUTO_PRESSURE_QUEUE_DEPTH APP_MEDIA_AUTO_PRESSURE_QUEUE_DEPTH
 #define MEDIA_GOVERNOR_AUTO_SEVERE_QUEUE_DEPTH APP_MEDIA_AUTO_SEVERE_QUEUE_DEPTH
+#define MEDIA_GOVERNOR_AUTO_SEVERE_LEVEL_STEP APP_MEDIA_AUTO_SEVERE_LEVEL_STEP
 #define MEDIA_GOVERNOR_VIDEO_MIN_BITRATE_BPS (200U * 1000U)
 #define MEDIA_GOVERNOR_TRANSPORT_COMPACT_MAX_PIXELS (640U * 480U)
 /* Compact calls can remain decodable at 200 kbps. The floor gives TGMP room
@@ -62,7 +63,9 @@ static const char *TAG = "media_governor";
         .height = MEDIA_GOVERNOR_FULL_HEIGHT, \
         .fps = MEDIA_GOVERNOR_FULL_FPS, \
         .bitrate_bps = APP_MEDIA_RTC_H264_BITRATE_BPS, \
-        .weak_network_mode = MEDIA_GOVERNOR_WEAK_NETWORK_OFF, \
+        .weak_network_mode = CONFIG_APP_RTC_VIDEO_AUTO_ADAPT_ENABLE ? \
+                                 MEDIA_GOVERNOR_WEAK_NETWORK_RESOLUTION_PRIORITY : \
+                                 MEDIA_GOVERNOR_WEAK_NETWORK_OFF, \
         .weak_network_level = 0, \
         .h264_min_qp = APP_MEDIA_RTC_H264_MIN_QP, \
         .h264_max_qp = APP_MEDIA_RTC_H264_MAX_QP, \
@@ -215,7 +218,9 @@ static TickType_t media_governor_tick_after_ms(TickType_t now, uint32_t delay_ms
 void media_governor_set_profile(media_governor_profile_t profile)
 {
     media_governor_profile_t old_profile = MEDIA_GOVERNOR_PROFILE_IDLE;
+    media_governor_video_config_t restored_config = {0};
     bool changed = false;
+    bool adaptation_reset = false;
 
     taskENTER_CRITICAL(&s_lock);
     old_profile = s_profile;
@@ -227,6 +232,20 @@ void media_governor_set_profile(media_governor_profile_t profile)
         s_auto_pressure_samples = 0;
         s_auto_healthy_samples = 0;
         s_auto_cooldown_until_tick = 0;
+        /* Weak-network levels describe pressure in one live media session.
+         * Restore the profile base when that session ends so a healthy next
+         * call always starts at the configured full-rate target. */
+        if (profile == MEDIA_GOVERNOR_PROFILE_IDLE &&
+            s_rtc_video_config.weak_network_level != 0U) {
+            s_rtc_video_config = s_adaptation_base_config;
+            s_rtc_video_config.weak_network_level = 0U;
+            s_transport_adaptation_active = false;
+            s_transport_requested_bitrate_bps = 0U;
+            s_transport_protection_not_before_tick = 0;
+            s_transport_recovery_not_before_tick = 0;
+            restored_config = s_rtc_video_config;
+            adaptation_reset = true;
+        }
         changed = true;
     }
     s_initialized = true;
@@ -237,6 +256,14 @@ void media_governor_set_profile(media_governor_profile_t profile)
                  "media profile: %s -> %s",
                  media_governor_profile_name(old_profile),
                  media_governor_profile_name(profile));
+        if (adaptation_reset) {
+            ESP_LOGI(TAG,
+                     "rtc video adaptation reset at session end: %ux%u@%u %ukbps",
+                     (unsigned)restored_config.width,
+                     (unsigned)restored_config.height,
+                     (unsigned)restored_config.fps,
+                     (unsigned)(restored_config.bitrate_bps / 1000U));
+        }
     }
 }
 
@@ -394,7 +421,12 @@ bool media_governor_auto_adaptation_enabled(void)
 static uint8_t media_governor_resolution_priority_fps(uint8_t base_fps,
                                                       uint8_t level)
 {
-    static const uint8_t fps_pct[] = {100U, 100U, 80U, 67U};
+    static const uint8_t fps_pct[] = {
+        100U,
+        APP_MEDIA_AUTO_LEVEL1_FPS_PERCENT,
+        APP_MEDIA_AUTO_LEVEL2_FPS_PERCENT,
+        APP_MEDIA_AUTO_LEVEL3_FPS_PERCENT,
+    };
 
     if (level >= sizeof(fps_pct) / sizeof(fps_pct[0])) {
         level = (uint8_t)(sizeof(fps_pct) / sizeof(fps_pct[0]) - 1U);
@@ -407,8 +439,18 @@ static uint8_t media_governor_resolution_priority_fps(uint8_t base_fps,
 esp_err_t media_governor_apply_weak_network_level(media_governor_weak_network_mode_t mode, uint8_t level)
 {
     media_governor_video_config_t config = {0};
-    static const uint8_t bitrate_pct_framerate_priority[] = {100U, 88U, 77U, 67U};
-    static const uint8_t bitrate_pct_resolution_priority[] = {100U, 90U, 78U, 67U};
+    static const uint8_t bitrate_pct_framerate_priority[] = {
+        100U,
+        APP_MEDIA_AUTO_LEVEL1_BITRATE_PERCENT,
+        APP_MEDIA_AUTO_LEVEL2_BITRATE_PERCENT,
+        APP_MEDIA_AUTO_LEVEL3_BITRATE_PERCENT,
+    };
+    static const uint8_t bitrate_pct_resolution_priority[] = {
+        100U,
+        APP_MEDIA_AUTO_LEVEL1_BITRATE_PERCENT,
+        APP_MEDIA_AUTO_LEVEL2_BITRATE_PERCENT,
+        APP_MEDIA_AUTO_LEVEL3_BITRATE_PERCENT,
+    };
 
     if (mode > MEDIA_GOVERNOR_WEAK_NETWORK_RESOLUTION_PRIORITY) {
         return ESP_ERR_INVALID_ARG;
@@ -578,7 +620,12 @@ bool media_governor_update_auto_adaptation(const media_governor_network_sample_t
     if (!cooldown_active &&
         pressure_samples >= MEDIA_GOVERNOR_AUTO_DEGRADE_SAMPLES &&
         next_level < 3U) {
-        next_level++;
+        const uint8_t level_step =
+            severe ? MEDIA_GOVERNOR_AUTO_SEVERE_LEVEL_STEP : 1U;
+        next_level = (uint8_t)(next_level + level_step);
+        if (next_level > 3U) {
+            next_level = 3U;
+        }
     } else if (!cooldown_active &&
                healthy_samples >= MEDIA_GOVERNOR_AUTO_RECOVER_SAMPLES &&
                next_level > 0U) {

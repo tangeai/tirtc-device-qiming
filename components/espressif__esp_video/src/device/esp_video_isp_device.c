@@ -614,6 +614,16 @@ static void isp_init_awb_param(struct isp_video *isp_video, esp_isp_awb_config_t
     video_rect2window(isp_video->video, &awb_config->window);
 #if ESP_VIDEO_ISP_DEVICE_AWB_SUBWIN
     video_rect2window(isp_video->video, &awb_config->subwindow);
+    /* Match the IDF driver's effective grid before each AWB reconfiguration.
+     * Its implicit flooring otherwise warns every frame for e.g. 1024x600.
+     * Leave undersized windows untouched so the driver still rejects them. */
+    int subwindow_width = awb_config->subwindow.btm_right.x - awb_config->subwindow.top_left.x + 1;
+    int subwindow_height = awb_config->subwindow.btm_right.y - awb_config->subwindow.top_left.y + 1;
+    if (subwindow_width >= 4 * ISP_AWB_WINDOW_X_NUM &&
+            subwindow_height >= 4 * ISP_AWB_WINDOW_Y_NUM) {
+        awb_config->subwindow.btm_right.x -= subwindow_width % ISP_AWB_WINDOW_X_NUM;
+        awb_config->subwindow.btm_right.y -= subwindow_height % ISP_AWB_WINDOW_Y_NUM;
+    }
 #endif
 }
 

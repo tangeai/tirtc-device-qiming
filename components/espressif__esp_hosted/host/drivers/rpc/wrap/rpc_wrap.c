@@ -1672,6 +1672,11 @@ int rpc_wifi_sta_get_ap_info(wifi_ap_record_t *ap_info)
 	resp = rpc_slaveif_wifi_sta_get_ap_info(req);
 
 	if (resp && resp->resp_event_status == SUCCESS) {
+		if (!resp->u.wifi_scan_ap_list.out_list) {
+			ESP_LOGE(TAG, "Wi-Fi AP info response has no payload");
+			rpc_rsp_callback(resp);
+			return ESP_FAIL;
+		}
 		g_h.funcs->_h_memcpy(ap_info, resp->u.wifi_scan_ap_list.out_list,
 				sizeof(wifi_ap_record_t));
 	}
@@ -1705,7 +1710,9 @@ int rpc_wifi_get_ps(wifi_ps_type_t *type)
 
 	resp = rpc_slaveif_wifi_get_ps(req);
 
-	*type = resp->u.wifi_ps.ps_mode;
+	if (resp && resp->resp_event_status == SUCCESS) {
+		*type = resp->u.wifi_ps.ps_mode;
+	}
 
 	return rpc_rsp_callback(resp);
 }

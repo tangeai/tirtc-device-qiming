@@ -1,6 +1,6 @@
 # 启明 WT9932P4C61-TINY 上手指南
 
-本文对应 Device Monitor `1.0.0`，补充板级环境和源码开发检查。
+本文对应 Device Monitor `1.0.1`，补充板级环境和源码开发检查。
 下载固件、网页/命令行烧录、配网绑定及各视频场景的完整步骤见 [使用教程](../README.md#使用教程)。
 同版本 Release 提供应用 BIN、16 MiB 完整镜像及随包烧录说明。
 
@@ -48,7 +48,7 @@ $env:ESP_IDF_VERSION
 ```powershell
 git clone https://github.com/tangeai/tirtc-device-qiming.git
 cd tirtc-device-qiming
-git checkout esp32-p4-wt9932p4c61-tiny-device-app-v1.0.0
+git checkout esp32-p4-wt9932p4c61-tiny-device-app-v1.0.1
 idf.py -B build reconfigure build
 ```
 
@@ -64,8 +64,8 @@ C61 使用 4-bit SDIO：CLK18、CMD19、D0-D3 为 GPIO14/15/16/17、复位 GPIO1
 
 ## 发布固件烧录
 
-从 [1.0.0 Release](https://github.com/tangeai/tirtc-device-qiming/releases/tag/esp32-p4-wt9932p4c61-tiny-device-app-v1.0.0)
-下载 `esp32p4-qiming-wt9932p4c61-tiny-full-v1.0.0.bin`、`SHA256SUMS.txt` 和 `FLASHING_CN.md`。
+从 [1.0.1 Release](https://github.com/tangeai/tirtc-device-qiming/releases/tag/esp32-p4-wt9932p4c61-tiny-device-app-v1.0.1)
+下载 `esp32p4-qiming-wt9932p4c61-tiny-full-v1.0.1.bin`、`SHA256SUMS.txt` 和 `FLASHING_CN.md`。
 核对文件为 `16,777,216` bytes 且 SHA-256 一致后，从 `0x0` 烧录；
 参数为 `DIO / 80MHz / 16MB`，P4 芯片修订版要求 `v3.1` 至 `v3.99`。
 
@@ -91,7 +91,7 @@ idf.py -B build -p $port flash monitor
 
 ## 首次启动和绑定
 
-1. 核对日志中的 `1.0.0`、工程名称、启明板型、屏幕和摄像头能力。
+1. 核对日志中的 `1.0.1`、工程名称、启明板型、屏幕和摄像头能力。
 2. 在屏幕 Wi-Fi 页面选择网络，确认获得 IP；不要把扫描成功当成联网成功。
 3. 等待校时、设备 Report 和临时 MQTT 订阅完成，再使用屏幕显示的绑定码。
 4. 在设备管理网页完成账号绑定，确认正式 MQTT、平台状态和 TiRTC 在线。
@@ -127,7 +127,7 @@ idf.py -B build -p $port flash monitor
 
 媒体目标见 [媒体参数](P4_MEDIA_ARCHITECTURE.md#默认参数)。
 音频底板未适配，采集、播放和 AEC 不列入已支持功能。
-微信下行视频卡顿仍待验证，不能把能接通或偶尔出图写成流畅性通过。
+微信下行视频仍需同时核对帧间隔、解码失败和长时间停帧，不能只用接通或偶尔出图判定通过。
 
 ## 日志与排障
 

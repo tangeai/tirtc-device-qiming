@@ -22,6 +22,15 @@ extern "C" {
 
 typedef struct esp_hosted_transport_config esp_hosted_config_t;
 
+typedef struct {
+	uint32_t submitted;
+	uint32_t not_ready;
+	uint32_t flow_controlled;
+	uint32_t mempool_empty;
+	uint32_t transport_failed;
+	uint8_t flow_control_active;
+} esp_hosted_sta_tx_stats_t;
+
 /* --------- Hosted Minimal APIs --------- */
 int esp_hosted_init(void);
 int esp_hosted_deinit(void);
@@ -29,6 +38,7 @@ int esp_hosted_deinit(void);
 int esp_hosted_connect_to_slave(void);
 int esp_hosted_get_coprocessor_fwversion(esp_hosted_coprocessor_fwver_t *ver_info);
 int esp_hosted_get_cp_info(uint32_t *cp_chip_id, char *cp_target_name, size_t cp_target_name_len);
+int esp_hosted_get_sta_tx_stats(esp_hosted_sta_tx_stats_t *stats);
 
 /* --------- Exhaustive API list --------- */
 /*

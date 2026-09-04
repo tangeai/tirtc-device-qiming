@@ -68,10 +68,24 @@
 #define APP_MEDIA_AUTO_RECOVER_SAMPLES                  6U
 #define APP_MEDIA_AUTO_COOLDOWN_MS                      10000U
 #define APP_MEDIA_AUTO_PRESSURE_BUFFER_PCT              8U
-#define APP_MEDIA_AUTO_SEVERE_BUFFER_PCT                25U
+#define APP_MEDIA_AUTO_SEVERE_BUFFER_PCT                20U
 #define APP_MEDIA_AUTO_HEALTHY_BUFFER_PCT               2U
 #define APP_MEDIA_AUTO_PRESSURE_QUEUE_DEPTH             2U
 #define APP_MEDIA_AUTO_SEVERE_QUEUE_DEPTH               4U
+/*
+ * A healthy link always starts at 100%. Sustained pressure steps through
+ * progressively smaller encoder budgets without rebuilding the negotiated
+ * resolution. Severe pressure advances two levels so a 96 KB/s path reaches
+ * a survivable media budget before MQTT keepalive is starved. Recovery still
+ * moves one level at a time after the longer healthy-sample gate above.
+ */
+#define APP_MEDIA_AUTO_LEVEL1_BITRATE_PERCENT           60U
+#define APP_MEDIA_AUTO_LEVEL2_BITRATE_PERCENT           35U
+#define APP_MEDIA_AUTO_LEVEL3_BITRATE_PERCENT           10U
+#define APP_MEDIA_AUTO_LEVEL1_FPS_PERCENT               75U
+#define APP_MEDIA_AUTO_LEVEL2_FPS_PERCENT               50U
+#define APP_MEDIA_AUTO_LEVEL3_FPS_PERCENT               25U
+#define APP_MEDIA_AUTO_SEVERE_LEVEL_STEP                 2U
 
 /* TGMP bitrate controller hysteresis. */
 #define APP_MEDIA_TGMP_EVENT_MIN_INTERVAL_US            500000ULL
@@ -130,4 +144,21 @@
 #if APP_MEDIA_TGMP_START_RANGE_PERCENT == 0U || \
     APP_MEDIA_TGMP_START_RANGE_PERCENT >= 100U
 #error "TGMP start range percentage must stay strictly between 0 and 100"
+#endif
+
+#if APP_MEDIA_AUTO_LEVEL1_BITRATE_PERCENT >= 100U || \
+    APP_MEDIA_AUTO_LEVEL2_BITRATE_PERCENT >= APP_MEDIA_AUTO_LEVEL1_BITRATE_PERCENT || \
+    APP_MEDIA_AUTO_LEVEL3_BITRATE_PERCENT >= APP_MEDIA_AUTO_LEVEL2_BITRATE_PERCENT
+#error "Automatic weak-network bitrate levels must decrease monotonically"
+#endif
+
+#if APP_MEDIA_AUTO_LEVEL1_FPS_PERCENT >= 100U || \
+    APP_MEDIA_AUTO_LEVEL2_FPS_PERCENT >= APP_MEDIA_AUTO_LEVEL1_FPS_PERCENT || \
+    APP_MEDIA_AUTO_LEVEL3_FPS_PERCENT >= APP_MEDIA_AUTO_LEVEL2_FPS_PERCENT
+#error "Automatic weak-network frame-rate levels must decrease monotonically"
+#endif
+
+#if APP_MEDIA_AUTO_SEVERE_LEVEL_STEP == 0U || \
+    APP_MEDIA_AUTO_SEVERE_LEVEL_STEP > 3U
+#error "Automatic weak-network severe step must stay within 1-3 levels"
 #endif

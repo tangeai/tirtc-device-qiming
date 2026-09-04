@@ -19,13 +19,13 @@ ESP32-C61 提供 Wi-Fi，配合 ST7102 屏幕、ST7123 触摸和 SC2336 MIPI 摄
 
 ### 2. 下载固件
 
-打开 [1.0.0 Release](https://github.com/tangeai/tirtc-device-qiming/releases/tag/esp32-p4-wt9932p4c61-tiny-device-app-v1.0.0)，
+打开 [1.0.1 Release](https://github.com/tangeai/tirtc-device-qiming/releases/tag/esp32-p4-wt9932p4c61-tiny-device-app-v1.0.1)，
 在 Assets 中下载固件、校验文件和烧录说明：
 
 | 文件 | 用途 |
 | --- | --- |
-| [完整镜像](https://github.com/tangeai/tirtc-device-qiming/releases/download/esp32-p4-wt9932p4c61-tiny-device-app-v1.0.0/esp32p4-qiming-wt9932p4c61-tiny-full-v1.0.0.bin) | 推荐，16 MiB，从 `0x0` 烧录 |
-| [应用 BIN](https://github.com/tangeai/tirtc-device-qiming/releases/download/esp32-p4-wt9932p4c61-tiny-device-app-v1.0.0/esp32p4-qiming-wt9932p4c61-tiny-app-v1.0.0.bin) | 仅应用程序，供匹配分区和启动配置的开发环境使用 |
+| [完整镜像](https://github.com/tangeai/tirtc-device-qiming/releases/download/esp32-p4-wt9932p4c61-tiny-device-app-v1.0.1/esp32p4-qiming-wt9932p4c61-tiny-full-v1.0.1.bin) | 推荐，16 MiB，从 `0x0` 烧录 |
+| [应用 BIN](https://github.com/tangeai/tirtc-device-qiming/releases/download/esp32-p4-wt9932p4c61-tiny-device-app-v1.0.1/esp32p4-qiming-wt9932p4c61-tiny-app-v1.0.1.bin) | 仅应用程序，供匹配分区和启动配置的开发环境使用 |
 | `SHA256SUMS.txt` | 校验下载文件是否完整 |
 | `release-manifest.json` | 核对源码、构建输入、烧录地址和固件哈希 |
 | `FLASHING_CN.md` | 随包提供的完整烧录步骤 |
@@ -33,8 +33,8 @@ ESP32-C61 提供 Wi-Fi，配合 ST7102 屏幕、ST7123 触摸和 SC2336 MIPI 摄
 完整镜像应为 **16,777,216 bytes**。在下载目录打开 PowerShell：
 
 ```powershell
-(Get-Item .\esp32p4-qiming-wt9932p4c61-tiny-full-v1.0.0.bin).Length
-Get-FileHash -Algorithm SHA256 .\esp32p4-qiming-wt9932p4c61-tiny-full-v1.0.0.bin
+(Get-Item .\esp32p4-qiming-wt9932p4c61-tiny-full-v1.0.1.bin).Length
+Get-FileHash -Algorithm SHA256 .\esp32p4-qiming-wt9932p4c61-tiny-full-v1.0.1.bin
 ```
 
 与同一 Release 的 `SHA256SUMS.txt` 比较，大小或哈希不符时不要烧录。
@@ -48,7 +48,7 @@ Get-FileHash -Algorithm SHA256 .\esp32p4-qiming-wt9932p4c61-tiny-full-v1.0.0.bin
 
 1. 使用 Chrome 或 Edge 打开 [Espressif ESP Tool](https://espressif.github.io/esptool-js/)。
 2. 连接 P4 下载口，选择电脑实际枚举的串口，确认识别为 ESP32-P4。
-3. 添加 `esp32p4-qiming-wt9932p4c61-tiny-full-v1.0.0.bin`，地址填 **`0x0`**。
+3. 添加 `esp32p4-qiming-wt9932p4c61-tiny-full-v1.0.1.bin`，地址填 **`0x0`**。
 4. 若工具提供参数选择，设置 Flash Size `16MB`、Mode `DIO`、Frequency `80MHz`。
 5. 开始烧录，等待写入和校验完成，再复位开发板。
 
@@ -63,7 +63,7 @@ Get-FileHash -Algorithm SHA256 .\esp32p4-qiming-wt9932p4c61-tiny-full-v1.0.0.bin
 py -m pip install "esptool==4.12.0"
 py -m esptool version
 $port = Read-Host "P4 serial port"
-py -m esptool --chip esp32p4 --port $port --baud 460800 write_flash --flash_mode dio --flash_freq 80m --flash_size 16MB 0x0 .\esp32p4-qiming-wt9932p4c61-tiny-full-v1.0.0.bin
+py -m esptool --chip esp32p4 --port $port --baud 460800 write_flash --flash_mode dio --flash_freq 80m --flash_size 16MB 0x0 .\esp32p4-qiming-wt9932p4c61-tiny-full-v1.0.1.bin
 ```
 
 高速写入失败时先检查数据线、供电和串口占用，再将波特率改为 `115200` 重试。
@@ -202,7 +202,7 @@ P4 不自带 Wi-Fi；不要将 C61/SDIO 配置改成 S3 原生 Wi-Fi，也不要
 ```powershell
 git clone https://github.com/tangeai/tirtc-device-qiming.git
 cd tirtc-device-qiming
-git checkout esp32-p4-wt9932p4c61-tiny-device-app-v1.0.0
+git checkout esp32-p4-wt9932p4c61-tiny-device-app-v1.0.1
 . "$env:IDF_PATH\export.ps1"
 idf.py --version
 idf.py -B build reconfigure build
