@@ -36,6 +36,8 @@
 #define CHECK_PARAM(...)
 #endif
 
+#define EVENT_QUEUE_SIZE                    10
+
 struct esp_video_format_desc_map {
     uint32_t pixel_format;
     char desc_string[30];
@@ -553,6 +555,9 @@ esp_err_t esp_video_open(const char *name, struct esp_video **video_ret)
                 }
 
                 video->inited = 1;
+                memset(&video->event, 0, sizeof(struct v4l2_event));
+                memset(&video->event_sub, 0, sizeof(struct v4l2_event_subscription));
+                video->event_queue = NULL;
             }
         } else {
             ESP_LOGD(TAG, "video->ops->init=NULL");
@@ -605,10 +610,21 @@ esp_err_t esp_video_close(struct esp_video *video)
      * reference can be set by other tasks.
      */
     if (video->inited) {
+        /**
+         * If event subscription is not cleared, return error
+         */
+        if (video->event_sub.type) {
+            video->reference++;
+            ret = ESP_ERR_INVALID_STATE;
+            ESP_LOGE(TAG, "Event subscription is not cleared");
+            goto exit_0;
+        }
+
         if (video->ops->deinit) {
             ret = video->ops->deinit(video);
             if (ret != ESP_OK) {
                 ESP_LOGE(TAG, "video->ops->deinit=%x", ret);
+                video->reference++;
             } else {
                 int stream_count = video->caps & V4L2_CAP_VIDEO_M2M ? 2 : 1;
 
@@ -621,6 +637,15 @@ esp_err_t esp_video_close(struct esp_video *video)
         } else {
             ESP_LOGD(TAG, "video->ops->deinit=NULL");
             ret = ESP_ERR_NOT_SUPPORTED;
+            video->reference++;
+        }
+
+        /* The event queue can be deleted after application unsubscribed the event,
+         * and the event tracing task should exit after receiving the unsubscribed event.
+         */
+        if (video->event_queue) {
+            vQueueDelete(video->event_queue);
+            video->event_queue = NULL;
         }
     }
 
@@ -1252,24 +1277,34 @@ esp_err_t esp_video_queue_element_index_buffer(struct esp_video *video, uint32_t
  * @param video Video object
  * @param type  Video stream type
  * @param index Video buffer element index
+ * @param payload Buffer element payload pointer
  *
  * @return
  *      - ESP_OK on success
  *      - Others if failed
  */
-uint8_t *esp_video_get_element_index_payload(struct esp_video *video, uint32_t type, int index)
+esp_err_t esp_video_get_element_index_payload(struct esp_video *video, uint32_t type, int index, uint8_t **payload)
 {
     struct esp_video_stream *stream;
     struct esp_video_buffer_element *element;
 
+    if (!payload) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
     stream = esp_video_get_stream(video, type);
-    if (!stream) {
-        return NULL;
+    if (!stream || !stream->buffer) {
+        return ESP_ERR_INVALID_ARG;
     }
 
     element = ESP_VIDEO_BUFFER_ELEMENT(stream->buffer, index);
+    if (!element->buffer) {
+        return ESP_ERR_INVALID_STATE;
+    }
 
-    return element->buffer;
+    *payload = element->buffer;
+
+    return ESP_OK;
 }
 
 /**
@@ -1278,21 +1313,25 @@ uint8_t *esp_video_get_element_index_payload(struct esp_video *video, uint32_t t
  * @param video Video object
  * @param type  Video stream type
  * @param ticks Wait OS tick
+ * @param element_ptr Video buffer element object pointer
  *
  * @return
- *      - Video buffer element object pointer on success
- *      - NULL if failed
+ *      - ESP_OK on success
+ *      - Others if failed
  */
-struct esp_video_buffer_element *esp_video_recv_element(struct esp_video *video, uint32_t type, uint32_t ticks)
+esp_err_t esp_video_recv_element(struct esp_video *video, uint32_t type, uint32_t ticks, struct esp_video_buffer_element **element_ptr)
 {
     BaseType_t ret;
     struct esp_video_stream *stream;
-    struct esp_video_buffer_element *element;
     uint32_t val = type;
+
+    if (!element_ptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
     stream = esp_video_get_stream(video, type);
     if (!stream) {
-        return NULL;
+        return ESP_ERR_INVALID_ARG;
     }
 
     if (video->device_caps & V4L2_CAP_VIDEO_M2M) {
@@ -1303,25 +1342,28 @@ struct esp_video_buffer_element *esp_video_recv_element(struct esp_video *video,
 
         ret = video->ops->notify(video, ESP_VIDEO_M2M_TRIGGER, &val);
         if (ret != ESP_OK) {
-            return NULL;
+            return ret;
         }
     }
 
     ret = xSemaphoreTake(stream->ready_sem, (TickType_t)ticks);
     if (ret != pdTRUE) {
-        return NULL;
+        return ESP_ERR_TIMEOUT;
     }
 
 #if CONFIG_ESP_VIDEO_ENABLE_DATA_PREPROCESSING
     ret = video->ops->notify(video, ESP_VIDEO_DATA_PREPROCESSING, &val);
     if (ret != ESP_OK) {
-        return NULL;
+        return ret;
     }
 #endif
 
-    element = esp_video_get_done_element(video, type);
+    *element_ptr = esp_video_get_done_element(video, type);
+    if (!*element_ptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
 
-    return element;
+    return ESP_OK;
 }
 
 /**
@@ -1712,6 +1754,11 @@ esp_err_t esp_video_set_sensor_format(struct esp_video *video, const esp_cam_sen
 
     CHECK_VIDEO_OBJ(video);
 
+    if (CAPTURE_VIDEO_STREAM(video) && CAPTURE_VIDEO_BUF_COUNT(video) > 0) {
+        ESP_LOGE(TAG, "Cannot set sensor format while buffers exist, please free buffers first (VIDIOC_REQBUFS count=0)");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (video->ops->set_sensor_format) {
         ret = video->ops->set_sensor_format(video, format);
         if (ret != ESP_OK) {
@@ -1750,6 +1797,36 @@ esp_err_t esp_video_get_sensor_format(struct esp_video *video, esp_cam_sensor_fo
         }
     } else {
         ESP_LOGD(TAG, "video->ops->get_sensor_format=NULL");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Enumerate sensor format
+ *
+ * @param video     Video object
+ * @param enum_fmt  Sensor format enumeration pointer
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - Others if failed
+ */
+esp_err_t esp_video_enum_sensor_format(struct esp_video *video, struct v4l2_sensor_format_enum *enum_fmt)
+{
+    esp_err_t ret;
+
+    CHECK_VIDEO_OBJ(video);
+
+    if (video->ops->enum_sensor_format) {
+        ret = video->ops->enum_sensor_format(video, enum_fmt);
+        if (ret != ESP_OK) {
+            ESP_LOGD(TAG, "video->ops->enum_sensor_format=%x", ret);
+            return ret;
+        }
+    } else {
+        ESP_LOGD(TAG, "video->ops->enum_sensor_format=NULL");
         return ESP_ERR_NOT_SUPPORTED;
     }
 
@@ -2046,6 +2123,11 @@ void IRAM_ATTR esp_video_skip_buffer(struct esp_video *video, uint32_t type, uin
     element = esp_video_buffer_get_element_by_buffer(stream->buffer, buffer);
 
     portENTER_CRITICAL_SAFE(&video->stream_lock);
+    if (!ELEMENT_IS_FREE(element)) {
+        portEXIT_CRITICAL_SAFE(&video->stream_lock);
+        return;
+    }
+
     ELEMENT_SET_ALLOCATED(element);
     TAILQ_INSERT_HEAD(&stream->queued_list, element, node);
     portEXIT_CRITICAL_SAFE(&video->stream_lock);
@@ -2160,6 +2242,19 @@ esp_err_t esp_video_config_buffer(struct esp_video *video, const struct v4l2_for
     }
 
 #if CONFIG_SPIRAM
+#if CONFIG_SPIRAM_ENC_EXEMPT
+    /**
+     * Test results show that enabling PSRAM encryption decreases PSRAM read and write performance.
+     *
+     * Therefore, if PSRAM encryption is enabled, the video buffer should be allocated in unencrypted regions
+     * to avoid reduced PSRAM read and write performance.
+     */
+    if (MALLOC_CAP_SPIRAM & frame_caps) {
+        frame_caps &= ~(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        frame_caps |= MALLOC_CAP_SPIRAM_NO_ENC;
+    }
+#endif
+
     ESP_RETURN_ON_ERROR(esp_cache_get_alignment(frame_caps, &alignments), TAG, "failed to get cache alignment");
 #else
     alignments = 4;
@@ -2272,6 +2367,253 @@ esp_err_t esp_video_get_dqbuf_timeout(struct esp_video *video, struct timeval *t
 
     timeout->tv_sec = timeout_ms / 1000;
     timeout->tv_usec = (timeout_ms % 1000) * 1000;
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Subscribe video event
+ *
+ * @param video     Video object
+ * @param sub       Event subscription buffer pointer
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - Others if failed
+ */
+esp_err_t esp_video_subscribe_event(struct esp_video *video, struct v4l2_event_subscription *sub)
+{
+    esp_err_t ret;
+    bool queue_created = false;
+
+    CHECK_VIDEO_OBJ(video);
+
+    if (!sub || sub->type == V4L2_EVENT_ALL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!video->ops->subscribe_event) {
+        ESP_LOGD(TAG, "video->ops->subscribe_event=NULL");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    struct esp_video_stream *stream = video->stream;
+    if (!stream) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /**
+     * If video is started, return error
+     */
+    if (stream->started) {
+        ESP_LOGE(TAG, "video is started or event queue is already created");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!video->event_queue) {
+        video->event_queue = xQueueCreate(EVENT_QUEUE_SIZE, sizeof(struct v4l2_event));
+        if (!video->event_queue) {
+            ESP_LOGE(TAG, "Failed to create event queue");
+            return ESP_ERR_NO_MEM;
+        }
+        queue_created = true;
+    }
+
+    ret = video->ops->subscribe_event(video, sub);
+    if (ret != ESP_OK) {
+        if (queue_created) {
+            vQueueDelete(video->event_queue);
+            video->event_queue = NULL;
+        }
+        ESP_LOGE(TAG, "video->ops->subscribe_event=%x", ret);
+        return ret;
+    }
+
+    video->event_sub = *sub;
+    return ESP_OK;
+}
+
+/**
+ * @brief Unsubscribe video event
+ *
+ * @param video     Video object
+ * @param sub       Event subscription buffer pointer
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - Others if failed
+ */
+esp_err_t esp_video_unsubscribe_event(struct esp_video *video, struct v4l2_event_subscription *sub)
+{
+    esp_err_t ret;
+
+    CHECK_VIDEO_OBJ(video);
+
+    if (!sub) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!video->ops->unsubscribe_event) {
+        ESP_LOGD(TAG, "video->ops->unsubscribe_event=NULL");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    struct esp_video_stream *stream = video->stream;
+    if (!stream) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /**
+     * If video is started or event subscription is not set, return error
+     */
+    if (stream->started || !video->event_sub.type) {
+        ESP_LOGD(TAG, "video is started or event subscription is not set");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Clear subscription first so ISR stops enqueueing. Keep event_queue until
+     * close so any blocked DQEVENT waiter can be deleted safely by the app.
+     */
+    ret = video->ops->unsubscribe_event(video, sub);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "video->ops->unsubscribe_event=%x", ret);
+        return ret;
+    }
+
+    memset(&video->event_sub, 0, sizeof(struct v4l2_event_subscription));
+    memset(&video->event, 0, sizeof(struct v4l2_event));
+
+    if (xQueueReset(video->event_queue) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to reset event queue");
+        return ESP_FAIL;
+    }
+
+    struct v4l2_event event = {
+        .type = V4L2_EVENT_ESP_VIDEO_EVENT_UNSUBSCRIBED,
+    };
+
+    if (xQueueSend(video->event_queue, &event, 0) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to send unsubscribed event");
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Get video event
+ *
+ * @param video     Video object
+ * @param event     Event buffer pointer
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - Others if failed
+ */
+esp_err_t esp_video_get_event(struct esp_video *video, struct v4l2_event *event)
+{
+    esp_err_t ret;
+
+    CHECK_VIDEO_OBJ(video);
+
+    if (!event) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!video->event_queue) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ret = xQueueReceive(video->event_queue, event, portMAX_DELAY);
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to receive event: %d", ret);
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Restart video hardware
+ *
+ * @param video     Video object
+ * @param config    Restart configuration
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - Others if failed
+ */
+esp_err_t esp_video_restart(struct esp_video *video, struct v4l2_restart_config *config)
+{
+    esp_err_t ret;
+
+    CHECK_VIDEO_OBJ(video);
+
+    if (!config) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    struct esp_video_stream *stream = esp_video_get_stream(video, config->type);
+    if (!stream) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!stream->started) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!video->ops->restart) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    ret = video->ops->restart(video, config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "video->ops->restart=%x", ret);
+        return ret;
+    }
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Set event callback
+ *
+ * @param video     Video object
+ * @param callback  Event callback pointer
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - Others if failed
+ */
+esp_err_t esp_video_set_event_callback(struct esp_video *video, struct v4l2_event_callback *callback)
+{
+    CHECK_VIDEO_OBJ(video);
+    if (!callback) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!video->event_queue) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    struct esp_video_stream *stream = video->stream;
+    if (!stream) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (stream->started) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!video->ops->set_event_callback) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    esp_err_t ret = video->ops->set_event_callback(video, callback);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "video->ops->set_event_callback=%x", ret);
+        return ret;
+    }
 
     return ESP_OK;
 }

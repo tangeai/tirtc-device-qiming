@@ -25,6 +25,8 @@ typedef struct {
 } camera_driver_frame_t;
 
 bool camera_driver_is_configured(void);
+/* Read current controls only; never starts or reconfigures the camera. */
+esp_err_t camera_driver_log_quality(void);
 esp_err_t camera_driver_prepare_video_subsystem(void);
 esp_err_t camera_driver_set_stream_target(uint16_t width, uint16_t height, uint8_t fps);
 esp_err_t camera_driver_init(void);

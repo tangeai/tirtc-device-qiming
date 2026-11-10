@@ -12,19 +12,6 @@ typedef enum {
     CALL_VIDEO_CODEC_MJPEG,
 } call_video_codec_t;
 
-typedef enum {
-    CALL_VIDEO_ORIENTATION_KEEP = 0,
-    CALL_VIDEO_ORIENTATION_NORMALIZE_LANDSCAPE,
-} call_video_orientation_policy_t;
-
-typedef struct {
-    call_video_codec_t codec;
-    /* MJPEG carries no rotation metadata in TIRTCFRAMEINFO. The application
-     * declares whether portrait pixel matrices should be normalized to the
-     * landscape display; frame dimensions remain authoritative. */
-    call_video_orientation_policy_t mjpeg_orientation;
-} call_video_renderer_config_t;
-
 typedef struct {
     uint32_t frame_index;
     uint32_t pts;
@@ -36,6 +23,10 @@ typedef struct {
     uint32_t decoded_wait_us;
     uint32_t convert_us;
     uint32_t output_wait_us;
+    uint16_t render_x;
+    uint16_t render_y;
+    uint16_t render_width;
+    uint16_t render_height;
     bool key_frame;
     bool decoder_bootstrap;
 } call_video_frame_trace_t;
@@ -69,20 +60,6 @@ typedef struct {
     uint32_t conversion_swap_max_us;
     uint32_t discontinuities;
     uint32_t input_overflows;
-    /* Per-start timing counters, independent of periodic log-window resets.
-     * Presentation here means handoff to the display, not LCD DMA completion. */
-    uint32_t receive_gap_max_us;
-    uint32_t present_gap_max_us;
-    uint32_t receive_gap_250ms;
-    uint32_t present_gap_250ms;
-    uint32_t receive_gap_1s;
-    uint32_t present_gap_1s;
-    uint32_t receive_age_us;
-    uint32_t present_age_us;
-    uint64_t decode_time_us;
-    uint32_t decode_max_us;
-    uint8_t playout_fps;
-    bool adaptive_playout;
     uint32_t latest_sequence;
     uint32_t queue_depth;
     uint32_t conversion_queue_depth;
@@ -93,8 +70,6 @@ esp_err_t call_video_renderer_prewarm(void);
 /* Reserves the P4 hardware JPEG driver's small internal DMA working set before
  * networking and RTC fragment internal RAM. The decoder is reused by calls. */
 esp_err_t call_video_renderer_prewarm_mjpeg_decoder(void);
-esp_err_t call_video_renderer_start_with_config(
-    const call_video_renderer_config_t *config);
 esp_err_t call_video_renderer_start_for_codec(call_video_codec_t codec);
 esp_err_t call_video_renderer_start(void);
 esp_err_t call_video_renderer_stop(void);
@@ -113,6 +88,8 @@ esp_err_t call_video_renderer_submit_mjpeg(const uint8_t *data,
  * claim or release, so conversion never overwrites a frame in flight. */
 esp_err_t call_video_renderer_present_next_rgb565(const uint16_t **pixels,
                                                    size_t *pixel_count,
+                                                   uint16_t *width,
+                                                   uint16_t *height,
                                                    uint32_t *sequence,
                                                    call_video_frame_trace_t *trace);
 void call_video_renderer_release_presented_rgb565(void);

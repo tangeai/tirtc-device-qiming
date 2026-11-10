@@ -1,0 +1,3 @@
+dependencies:
+  espressif/esp_hosted: "==3.0.7"
+  idf: "==5.5.5"

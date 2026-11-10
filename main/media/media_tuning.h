@@ -9,7 +9,7 @@
  * runtime media policy.
  */
 
-/* Normal RTC/IPC uplink profile. SC2336 exposes 1024x600 natively. */
+/* Normal RTC/IPC uplink profile. */
 #define APP_MEDIA_CAMERA_CAPTURE_WIDTH                  1024U
 #define APP_MEDIA_CAMERA_CAPTURE_HEIGHT                 600U
 #define APP_MEDIA_RTC_VIDEO_WIDTH                       1024U
@@ -23,11 +23,11 @@
  * Stable full-duplex device-call profile.
  *
  * The encoder bitrate is a rate-control target, not a hard ceiling. Use the
- * 384x256 landscape surface to keep the P4 software decoder inside the frame
- * budget under full-frame motion. The Qiming renderer scales once through PPA
- * to its 640x480 DSI viewport while preserving aspect ratio. Keep the validated
- * per-frame bit budget while reserving CPU time for UI and transport. Let rate
- * control
+ * 3:2 landscape surface with 384 macroblocks per frame keeps the P4 software
+ * decoder workload bounded under full-frame motion. The receiver scales once
+ * through PPA, then LVGL presents the half-size surface on the panel. Keep the same per-frame
+ * bit budget as the validated 320 kbit/s at 15 fps profile while reserving CPU
+ * time for full-duplex audio, UI, and transport. Let rate control
  * use the full legal H.264 QP range when full-frame motion would otherwise
  * exceed the peer's software-decode budget. Weak-network adaptation remains
  * opt-in and starts from this normal profile.
@@ -39,23 +39,25 @@
 #define APP_MEDIA_CALL_VIDEO_MIN_QP                     34U
 #define APP_MEDIA_CALL_VIDEO_MAX_QP                     51U
 
-/* WeChat negotiates a fixed supported edge length. Keep its uplink at the
- * native landscape surface instead of inheriting the P4-to-P4 decoder guard. */
-#define APP_MEDIA_WECHAT_VIDEO_WIDTH                    480U
-#define APP_MEDIA_WECHAT_VIDEO_HEIGHT                   320U
+/* Phone/browser uplink uses SC2336's native landscape geometry. The encoder
+ * reads 608 padded lines and signals the 600 visible lines through SPS crop. */
+#define APP_MEDIA_WECHAT_VIDEO_WIDTH                    1024U
+#define APP_MEDIA_WECHAT_VIDEO_HEIGHT                   600U
 #define APP_MEDIA_WECHAT_VIDEO_FPS                      15U
-#define APP_MEDIA_WECHAT_VIDEO_BITRATE_BPS              480000U
-#define APP_MEDIA_WECHAT_VIDEO_MIN_QP                   30U
+#define APP_MEDIA_WECHAT_VIDEO_BITRATE_BPS              2000000U
+#define APP_MEDIA_WECHAT_VIDEO_MIN_QP                   26U
 #define APP_MEDIA_WECHAT_VIDEO_MAX_QP                   46U
 /* H264 encoder and transport protection. */
 /*
- * IPC keeps a two-second recovery interval. Full-duplex calls use four
- * seconds to reduce IDR work without making recovery depend entirely on a PLI
- * traversing the same congested TGTRP path. This bounds reference-chain loss
- * while stream start, subscription and peer requests can still force an IDR.
+ * IPC keeps a two-second recovery interval. Full-duplex calls use a longer
+ * sixteen-second interval because moving 480x320 IDR frames take the software
+ * P4 decoder roughly two frame budgets while delta frames remain near budget.
+ * Stream start, subscription, transport recovery, and peer requests still
+ * force an immediate IDR, so the longer nominal GOP does not replace explicit
+ * recovery signaling.
  */
 #define APP_MEDIA_H264_GOP_DURATION_MS                  2000U
-#define APP_MEDIA_CALL_H264_GOP_DURATION_MS              4000U
+#define APP_MEDIA_CALL_H264_GOP_DURATION_MS             16000U
 #define APP_MEDIA_H264_OUTPUT_BUFFER_BYTES              (1024U * 1024U)
 #define APP_MEDIA_H264_MAX_DELTA_PAYLOAD_BYTES          (256U * 1024U)
 #define APP_MEDIA_H264_STARTUP_GUARD_MS                 2500U
@@ -68,32 +70,19 @@
 #define APP_MEDIA_AUTO_RECOVER_SAMPLES                  6U
 #define APP_MEDIA_AUTO_COOLDOWN_MS                      10000U
 #define APP_MEDIA_AUTO_PRESSURE_BUFFER_PCT              8U
-#define APP_MEDIA_AUTO_SEVERE_BUFFER_PCT                20U
+#define APP_MEDIA_AUTO_SEVERE_BUFFER_PCT                25U
 #define APP_MEDIA_AUTO_HEALTHY_BUFFER_PCT               2U
 #define APP_MEDIA_AUTO_PRESSURE_QUEUE_DEPTH             2U
 #define APP_MEDIA_AUTO_SEVERE_QUEUE_DEPTH               4U
-/*
- * A healthy link always starts at 100%. Sustained pressure steps through
- * progressively smaller encoder budgets without rebuilding the negotiated
- * resolution. Severe pressure advances two levels so a 96 KB/s path reaches
- * a survivable media budget before MQTT keepalive is starved. Recovery still
- * moves one level at a time after the longer healthy-sample gate above.
- */
-#define APP_MEDIA_AUTO_LEVEL1_BITRATE_PERCENT           60U
-#define APP_MEDIA_AUTO_LEVEL2_BITRATE_PERCENT           35U
-#define APP_MEDIA_AUTO_LEVEL3_BITRATE_PERCENT           10U
-#define APP_MEDIA_AUTO_LEVEL1_FPS_PERCENT               75U
-#define APP_MEDIA_AUTO_LEVEL2_FPS_PERCENT               50U
-#define APP_MEDIA_AUTO_LEVEL3_FPS_PERCENT               25U
-#define APP_MEDIA_AUTO_SEVERE_LEVEL_STEP                 2U
 
 /* TGMP bitrate controller hysteresis. */
 #define APP_MEDIA_TGMP_EVENT_MIN_INTERVAL_US            500000ULL
 #define APP_MEDIA_TGMP_EVENT_FAST_STEP_BPS              64000U
-/* Keep the normal device-call profile at 256 kbit/s. These bounds are dormant
- * while CONFIG_APP_RTC_SDK_VIDEO_ADAPT_ENABLE is disabled. They only define an
- * explicit TGMP experiment and must not silently change the normal product
- * profile. */
+/* Keep the normal device-call profile at 256 kbit/s. The lower bound is only
+ * exposed to TGMP after transport feedback reports congestion. At 160 kbit/s
+ * the measured 300 ms / 5% loss path still accumulated retransmission bursts
+ * large enough to overflow the P4 decoder ingress queue; 96 kbit/s leaves the
+ * controller one real protection step without degrading a healthy call. */
 #define APP_MEDIA_TGMP_COMPACT_MIN_BITRATE_BPS           (96U * 1000U)
 #define APP_MEDIA_TGMP_LARGE_MIN_BITRATE_BPS            (750U * 1000U)
 #define APP_MEDIA_TGMP_MIN_RATIO_DIVISOR                4U
@@ -119,10 +108,6 @@
 #error "Stable call profile must stay within 1-15 fps"
 #endif
 
-#if APP_MEDIA_WECHAT_VIDEO_FPS == 0U || APP_MEDIA_WECHAT_VIDEO_FPS > 15U
-#error "WeChat video profile must stay within 1-15 fps"
-#endif
-
 #if APP_MEDIA_RTC_H264_MIN_QP > APP_MEDIA_RTC_H264_MAX_QP
 #error "RTC video minimum QP must not exceed maximum QP"
 #endif
@@ -133,8 +118,10 @@
 #endif
 
 #if (APP_MEDIA_WECHAT_VIDEO_WIDTH % 16U) != 0U || \
-    (APP_MEDIA_WECHAT_VIDEO_HEIGHT % 16U) != 0U
-#error "WeChat video dimensions must be aligned to 16 pixels"
+    (APP_MEDIA_WECHAT_VIDEO_HEIGHT % 2U) != 0U || \
+    (APP_MEDIA_RTC_VIDEO_WIDTH % 16U) != 0U || \
+    (APP_MEDIA_RTC_VIDEO_HEIGHT % 2U) != 0U
+#error "Native H264 input requires macroblock-aligned width and even visible height"
 #endif
 
 #if APP_MEDIA_TGMP_COMPACT_MIN_BITRATE_BPS > APP_MEDIA_CALL_VIDEO_BITRATE_BPS
@@ -144,21 +131,4 @@
 #if APP_MEDIA_TGMP_START_RANGE_PERCENT == 0U || \
     APP_MEDIA_TGMP_START_RANGE_PERCENT >= 100U
 #error "TGMP start range percentage must stay strictly between 0 and 100"
-#endif
-
-#if APP_MEDIA_AUTO_LEVEL1_BITRATE_PERCENT >= 100U || \
-    APP_MEDIA_AUTO_LEVEL2_BITRATE_PERCENT >= APP_MEDIA_AUTO_LEVEL1_BITRATE_PERCENT || \
-    APP_MEDIA_AUTO_LEVEL3_BITRATE_PERCENT >= APP_MEDIA_AUTO_LEVEL2_BITRATE_PERCENT
-#error "Automatic weak-network bitrate levels must decrease monotonically"
-#endif
-
-#if APP_MEDIA_AUTO_LEVEL1_FPS_PERCENT >= 100U || \
-    APP_MEDIA_AUTO_LEVEL2_FPS_PERCENT >= APP_MEDIA_AUTO_LEVEL1_FPS_PERCENT || \
-    APP_MEDIA_AUTO_LEVEL3_FPS_PERCENT >= APP_MEDIA_AUTO_LEVEL2_FPS_PERCENT
-#error "Automatic weak-network frame-rate levels must decrease monotonically"
-#endif
-
-#if APP_MEDIA_AUTO_SEVERE_LEVEL_STEP == 0U || \
-    APP_MEDIA_AUTO_SEVERE_LEVEL_STEP > 3U
-#error "Automatic weak-network severe step must stay within 1-3 levels"
 #endif

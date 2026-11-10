@@ -51,8 +51,8 @@ static bool video_yuv420_config_valid(const video_yuv420_scaler_config_t *config
            config->output_width > 0U && config->output_height > 0U &&
            (config->input_width & 1U) == 0U && (config->input_height & 1U) == 0U &&
            (config->output_width & 1U) == 0U && (config->output_height & 1U) == 0U &&
-           config->output_width <= config->input_width &&
-           config->output_height <= config->input_height;
+           (config->rotate_ccw90 ? config->output_height : config->output_width) <= config->input_width &&
+           (config->rotate_ccw90 ? config->output_width : config->output_height) <= config->input_height;
 }
 
 static bool video_yuv420_select_geometry(const video_yuv420_scaler_config_t *config,
@@ -62,8 +62,9 @@ static bool video_yuv420_select_geometry(const video_yuv420_scaler_config_t *con
                                          uint16_t *crop_y,
                                          uint8_t *scale_step)
 {
-    const uint32_t scaled_width_numerator = (uint32_t)config->output_width * VIDEO_YUV420_SCALE_DENOMINATOR;
-    const uint32_t scaled_height_numerator = (uint32_t)config->output_height * VIDEO_YUV420_SCALE_DENOMINATOR;
+    /* Select the crop in SENSOR axes, before PPA exchanges the output axes. */
+    const uint32_t scaled_width_numerator = (uint32_t)(config->rotate_ccw90 ? config->output_height : config->output_width) * VIDEO_YUV420_SCALE_DENOMINATOR;
+    const uint32_t scaled_height_numerator = (uint32_t)(config->rotate_ccw90 ? config->output_width : config->output_height) * VIDEO_YUV420_SCALE_DENOMINATOR;
 
     /* PPA YUV420 masks the fractional scale bit 0, so only even 1/16 steps are exact. */
     for (uint8_t step = 2U; step <= VIDEO_YUV420_SCALE_DENOMINATOR; step += 2U) {
@@ -175,7 +176,8 @@ bool video_yuv420_scaler_matches(video_yuv420_scaler_handle_t handle,
     return handle->config.input_width == config->input_width &&
            handle->config.input_height == config->input_height &&
            handle->config.output_width == config->output_width &&
-           handle->config.output_height == config->output_height;
+           handle->config.output_height == config->output_height &&
+           handle->config.rotate_ccw90 == config->rotate_ccw90;
 }
 
 esp_err_t video_yuv420_scaler_warmup(video_yuv420_scaler_handle_t handle)
@@ -261,7 +263,8 @@ esp_err_t video_yuv420_scaler_process(video_yuv420_scaler_handle_t handle,
         .out.block_offset_y = 0,
         .out.srm_cm = PPA_SRM_COLOR_MODE_YUV420,
 
-        .rotation_angle = PPA_SRM_ROTATION_ANGLE_0,
+        /* PPA positive angles are counterclockwise, not clockwise. */
+        .rotation_angle = handle->config.rotate_ccw90 ? PPA_SRM_ROTATION_ANGLE_90 : PPA_SRM_ROTATION_ANGLE_0,
         .scale_x = scale,
         .scale_y = scale,
         .mode = PPA_TRANS_MODE_BLOCKING,

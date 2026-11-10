@@ -12,6 +12,8 @@
 #include "esp_attr.h"
 #include "esp_check.h"
 #include "hal/isp_ll.h"
+#include "hal/efuse_hal.h"
+#include "soc/chip_revision.h"
 #include "esp_ldo_regulator.h"
 #include "esp_cam_ctlr.h"
 #include "esp_cam_ctlr_csi.h"
@@ -49,13 +51,13 @@ struct csi_video {
     esp_video_device_common_t *common; /* Must be first for esp_video_device_common access */
 
     esp_video_csi_isp_in_out_format_t in_out_format;
-    color_raw_element_order_t sensor_bayer_order;
     color_raw_element_order_t bayer_order;
     isp_color_range_t yuv_range;
     isp_yuv_conv_std_t yuv_std;
 
-    bool sensor_hmirror;
-    bool sensor_vflip;
+    /* Filled by start_init_config, copied to the fields above by commit_init_config. */
+    esp_video_csi_isp_in_out_format_t pending_in_out_format;
+    color_raw_element_order_t pending_bayer_order;
 
     esp_ldo_channel_handle_t ldo_handle;
 
@@ -103,94 +105,51 @@ static esp_err_t csi_get_input_bayer_order(const esp_cam_sensor_isp_info_t *isp_
     return ret;
 }
 
-static color_raw_element_order_t csi_transform_bayer_order(color_raw_element_order_t order,
-        bool hmirror, bool vflip)
+static esp_err_t csi_prepare_format(const esp_cam_sensor_format_t *sensor_fmt,
+                                    uint32_t *v4l2_format,
+                                    esp_video_csi_isp_in_out_format_t *in_out_format,
+                                    color_raw_element_order_t *bayer_order)
 {
-    if (hmirror && vflip) {
-        switch (order) {
-        case COLOR_RAW_ELEMENT_ORDER_BGGR: return COLOR_RAW_ELEMENT_ORDER_RGGB;
-        case COLOR_RAW_ELEMENT_ORDER_GBRG: return COLOR_RAW_ELEMENT_ORDER_GRBG;
-        case COLOR_RAW_ELEMENT_ORDER_GRBG: return COLOR_RAW_ELEMENT_ORDER_GBRG;
-        case COLOR_RAW_ELEMENT_ORDER_RGGB: return COLOR_RAW_ELEMENT_ORDER_BGGR;
-        default: return order;
-        }
-    }
-    if (hmirror) {
-        switch (order) {
-        case COLOR_RAW_ELEMENT_ORDER_BGGR: return COLOR_RAW_ELEMENT_ORDER_GBRG;
-        case COLOR_RAW_ELEMENT_ORDER_GBRG: return COLOR_RAW_ELEMENT_ORDER_BGGR;
-        case COLOR_RAW_ELEMENT_ORDER_GRBG: return COLOR_RAW_ELEMENT_ORDER_RGGB;
-        case COLOR_RAW_ELEMENT_ORDER_RGGB: return COLOR_RAW_ELEMENT_ORDER_GRBG;
-        default: return order;
-        }
-    }
-    if (vflip) {
-        switch (order) {
-        case COLOR_RAW_ELEMENT_ORDER_BGGR: return COLOR_RAW_ELEMENT_ORDER_GRBG;
-        case COLOR_RAW_ELEMENT_ORDER_GBRG: return COLOR_RAW_ELEMENT_ORDER_RGGB;
-        case COLOR_RAW_ELEMENT_ORDER_GRBG: return COLOR_RAW_ELEMENT_ORDER_BGGR;
-        case COLOR_RAW_ELEMENT_ORDER_RGGB: return COLOR_RAW_ELEMENT_ORDER_GBRG;
-        default: return order;
-        }
-    }
-    return order;
-}
-
-static esp_err_t csi_start_init_config(esp_video_device_common_t *common, esp_video_device_common_init_data_t *config)
-{
-    const esp_cam_sensor_format_t *sensor_fmt = common->sensor_format;
-    struct csi_video *csi_video = (struct csi_video *)common->priv;
     uint32_t csi_output_v4l2_fmt = 0;
 
     if (sensor_fmt->isp_info) {
         csi_output_v4l2_fmt = V4L2_DEFAULT_OUT_COLOR;
     }
 
-    ESP_RETURN_ON_ERROR(esp_video_csi_check_format(sensor_fmt->format, csi_output_v4l2_fmt, &csi_video->in_out_format), TAG, "failed to check CSI format");
-    ESP_RETURN_ON_ERROR(csi_get_input_bayer_order(sensor_fmt->isp_info, &csi_video->sensor_bayer_order), TAG, "failed to get bayer order");
-    csi_video->sensor_hmirror = false;
-    csi_video->sensor_vflip = false;
-    csi_video->bayer_order = csi_video->sensor_bayer_order;
+    ESP_RETURN_ON_ERROR(esp_video_csi_check_format(sensor_fmt->format, csi_output_v4l2_fmt, in_out_format),
+                        TAG, "failed to check CSI format");
+    ESP_RETURN_ON_ERROR(csi_get_input_bayer_order(sensor_fmt->isp_info, bayer_order),
+                        TAG, "failed to get bayer order");
 
+    if (v4l2_format) {
+        *v4l2_format = csi_output_v4l2_fmt;
+    }
+    return ESP_OK;
+}
+
+static esp_err_t csi_start_init_config(esp_video_device_common_t *common, const esp_cam_sensor_format_t *sensor_fmt,
+                                       esp_video_device_common_init_data_t *config)
+{
+    struct csi_video *csi_video = (struct csi_video *)common->priv;
+
+    return csi_prepare_format(sensor_fmt, &config->v4l2_format,
+                              &csi_video->pending_in_out_format, &csi_video->pending_bayer_order);
+}
+
+static void csi_commit_init_config(esp_video_device_common_t *common, const esp_cam_sensor_format_t *sensor_fmt,
+                                   const esp_video_device_common_init_data_t *config)
+{
+    struct csi_video *csi_video = (struct csi_video *)common->priv;
+
+    (void)sensor_fmt;
+    (void)config;
+    csi_video->in_out_format = csi_video->pending_in_out_format;
+    csi_video->bayer_order = csi_video->pending_bayer_order;
     csi_video->yuv_range = ISP_COLOR_RANGE_FULL;
     csi_video->yuv_std = ISP_YUV_CONV_STD_BT601;
 #if ESP_VIDEO_ISP_DEVICE_CROP
     csi_video->set_crop = false;
 #endif
-
-    config->v4l2_format = csi_output_v4l2_fmt;
-    return ESP_OK;
-}
-
-static void csi_sensor_ctrls_applied(esp_video_device_common_t *common,
-                                     const struct v4l2_ext_controls *ctrls)
-{
-    struct csi_video *csi_video = (struct csi_video *)common->priv;
-    bool orientation_changed = false;
-
-    for (uint32_t index = 0; index < ctrls->count; ++index) {
-        const struct v4l2_ext_control *ctrl = &ctrls->controls[index];
-        if (ctrl->id == V4L2_CID_HFLIP) {
-            csi_video->sensor_hmirror = ctrl->value != 0;
-            orientation_changed = true;
-        } else if (ctrl->id == V4L2_CID_VFLIP) {
-            csi_video->sensor_vflip = ctrl->value != 0;
-            orientation_changed = true;
-        }
-    }
-
-    if (!orientation_changed || csi_video->in_out_format.isp_bypass_required) {
-        return;
-    }
-
-    csi_video->bayer_order = csi_transform_bayer_order(csi_video->sensor_bayer_order,
-                                                       csi_video->sensor_hmirror,
-                                                       csi_video->sensor_vflip);
-    ESP_LOGI(TAG, "sensor orientation updates ISP Bayer order: base=%d hmirror=%d vflip=%d active=%d",
-             (int)csi_video->sensor_bayer_order,
-             csi_video->sensor_hmirror,
-             csi_video->sensor_vflip,
-             (int)csi_video->bayer_order);
 }
 
 static esp_err_t csi_video_init(esp_video_device_common_t *common)
@@ -208,7 +167,7 @@ static esp_err_t csi_video_init(esp_video_device_common_t *common)
     return ESP_OK;
 }
 
-static esp_err_t start_csi_ctlr(esp_video_device_common_t *common, esp_cam_ctlr_handle_t *cam_ctrl_handle_ret, bool isp_swap_short_required)
+static esp_err_t start_csi_ctlr(esp_video_device_common_t *common, esp_cam_ctlr_handle_t *cam_ctrl_handle_ret, bool isp_swap_short_required, bool swap_input_8bit_required)
 {
     struct csi_video *csi_video = (struct csi_video *)common->priv;
     const esp_cam_sensor_format_t *sensor_format = common->sensor_format;
@@ -252,6 +211,15 @@ static esp_err_t start_csi_ctlr(esp_video_device_common_t *common, esp_cam_ctlr_
     }
 #endif
 
+#if ESP_VIDEO_CSI_DRIVER_HAS_8BIT_SWAP
+    /**
+     * If the ISP swap short is required and the input data is 8-bit, enable 8-bit swap for CSI input data
+     */
+    if (isp_swap_short_required && swap_input_8bit_required) {
+        csi_config.input_8bit_swap_en  = true;
+    }
+#endif
+
     ESP_RETURN_ON_ERROR(esp_cam_new_csi_ctlr(&csi_config, &cam_ctrl_handle), TAG, "failed to new CSI");
 
     *cam_ctrl_handle_ret = cam_ctrl_handle;
@@ -263,13 +231,13 @@ static esp_err_t start_csi_swap_short(esp_video_device_common_t *common, bool is
 {
 #if ESP_VIDEO_CSI_DEVICE_SW_SWAP_SHORT
     /**
-     * If the ISP swap short is required, don't start CSI swap short
+     * If the ISP swap short is required, don't start software swap short
      */
     if (isp_swap_short_required) {
-        ESP_LOGD(TAG, "ISP swap short is required, skipping CSI swap short");
+        ESP_LOGD(TAG, "ISP swap short is required, skipping SW swap short");
         return ESP_OK;
     } else {
-        ESP_LOGD(TAG, "ISP swap short is not required, starting CSI swap short");
+        ESP_LOGD(TAG, "ISP swap short is not required, starting SW swap short");
     }
 
     const esp_cam_sensor_format_t *sensor_format = common->sensor_format;
@@ -332,12 +300,13 @@ static esp_err_t remove_isp_proc(isp_proc_handle_t isp_proc)
  * @param state MIPI-CSI state object
  * @param state MIPI-CSI V4L2 capture format
  * @param isp_swap_short_required Whether ISP swap short is required
+ * @param swap_input_8bit_required Whether swap mode is 8-bit for input data is required
  *
  * @return
  *      - ESP_OK on success
  *      - Others if failed
  */
-static esp_err_t start_isp(esp_video_device_common_t *common, bool isp_swap_short_required)
+static esp_err_t start_isp(esp_video_device_common_t *common, bool isp_swap_short_required, bool swap_input_8bit_required)
 {
     esp_err_t ret;
     isp_proc_handle_t isp_proc;
@@ -369,7 +338,10 @@ static esp_err_t start_isp(esp_video_device_common_t *common, bool isp_swap_shor
     };
 
 #if ESP_VIDEO_ISP_DRIVER_HAS_BYTE_SWAP
-    if (isp_swap_short_required) {
+    /**
+     * Only CSI supports 8-bit swap, so if the swap mode is 8-bit, no need to enable byte swap for ISP
+     */
+    if (isp_swap_short_required && !swap_input_8bit_required) {
         isp_config.flags.byte_swap_en = true;
     }
 #endif
@@ -388,6 +360,14 @@ static esp_err_t start_isp(esp_video_device_common_t *common, bool isp_swap_shor
         break;
     }
     ESP_RETURN_ON_ERROR(esp_isp_new_processor(&isp_config, &isp_proc), TAG, "failed to new ISP");
+
+#if CONFIG_ESP_VIDEO_DISABLE_ISP_ERROR_INTERRUPT
+#if ESP_VIDEO_CSI_DRIVER_HAS_EVENT
+    isp_ll_enable_intr(&ISP, ISP_LL_EVENT_ERROR_MASK, false);
+#else
+    ESP_LOGD(TAG, "This version of ISP driver does not support to disable ISP error interrupt");
+#endif
+#endif
 
     bool crop_required = false;
 #if ESP_VIDEO_ISP_DEVICE_CROP
@@ -438,6 +418,7 @@ static esp_err_t csi_video_start(esp_video_device_common_t *common, esp_cam_ctlr
 {
     esp_err_t ret = ESP_OK;
     bool isp_swap_short_required = false;
+    bool swap_input_8bit_required = false;
 
 #if ESP_VIDEO_ISP_DRIVER_HAS_BYTE_SWAP
     uint32_t data_seq = ESP_CAM_SENSOR_DATA_SEQ_NONE;
@@ -449,9 +430,19 @@ static esp_err_t csi_video_start(esp_video_device_common_t *common, esp_cam_ctlr
     }
 #endif
 
+#if ESP_VIDEO_CSI_DRIVER_HAS_8BIT_SWAP
+    unsigned chip_version = efuse_hal_chip_revision();
+    /**
+     * Only ESP32P4 chips with version 300 and above support 8-bit swap mode
+     */
+    if (ESP_CHIP_REV_ABOVE(chip_version, 300)) {
+        swap_input_8bit_required = true;
+    }
+#endif
+
     ESP_RETURN_ON_ERROR(start_csi_swap_short(common, isp_swap_short_required), TAG, "failed to start CSI swap short");
-    ESP_GOTO_ON_ERROR(start_csi_ctlr(common, cam_ctrl_handle_ret, isp_swap_short_required), fail_0, TAG, "failed to start CSI ctlr");
-    ESP_GOTO_ON_ERROR(start_isp(common, isp_swap_short_required), fail_1, TAG, "failed to start ISP");
+    ESP_GOTO_ON_ERROR(start_csi_ctlr(common, cam_ctrl_handle_ret, isp_swap_short_required, swap_input_8bit_required), fail_0, TAG, "failed to start CSI ctlr");
+    ESP_GOTO_ON_ERROR(start_isp(common, isp_swap_short_required, swap_input_8bit_required), fail_1, TAG, "failed to start ISP");
 
     return ESP_OK;
 
@@ -466,6 +457,10 @@ fail_0:
 static esp_err_t csi_video_stop(esp_video_device_common_t *common)
 {
     ESP_RETURN_ON_ERROR(stop_isp(common), TAG, "failed to stop ISP");
+
+    /**
+     * This function check resource internally, so it can be called even if the CSI swap short is not started
+     */
     stop_csi_swap_short(common);
 
     return ESP_OK;
@@ -583,19 +578,37 @@ static esp_err_t csi_check_enum_framesizes(esp_video_device_common_t *common, st
     return ESP_OK;
 }
 
+#if ESP_VIDEO_CSI_DRIVER_HAS_EVENT
+static esp_err_t csi_video_subscribe_event(esp_video_device_common_t *common, struct v4l2_event_subscription *sub)
+{
+    if (sub->type != V4L2_EVENT_ESP_MIPI_CSI_ERROR) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return ESP_OK;
+}
+
+static esp_err_t csi_video_unsubscribe_event(esp_video_device_common_t *common, struct v4l2_event_subscription *sub)
+{
+    return ESP_OK;
+}
+#endif
 static const esp_video_device_intf_t s_csi_device_intf = {
     .init              = csi_video_init,
     .start_init_config = csi_start_init_config,
+    .commit_init_config = csi_commit_init_config,
     .deinit            = csi_video_deinit,
     .start             = csi_video_start,
     .stop              = csi_video_stop,
     .enum_format       = csi_video_enum_format,
     .check_set_format  = csi_check_set_format,
     .reprocess         = csi_video_reprocess,
-    .sensor_ctrls_applied = csi_sensor_ctrls_applied,
     .check_enum_framesizes = csi_check_enum_framesizes,
 #if CONFIG_ESP_VIDEO_ENABLE_ISP_VIDEO_DEVICE && ESP_VIDEO_ISP_DEVICE_CROP
     .set_selection     = csi_set_selection,
+#endif
+#if ESP_VIDEO_CSI_DRIVER_HAS_EVENT
+    .subscribe_event = csi_video_subscribe_event,
+    .unsubscribe_event = csi_video_unsubscribe_event,
 #endif
 };
 
@@ -612,6 +625,17 @@ esp_err_t esp_video_create_csi_video_device(esp_cam_sensor_device_t *sensor, con
 {
     esp_err_t ret;
     struct csi_video *csi_video;
+
+#if CONFIG_ESP_VIDEO_ENABLE_ISP_VIDEO_DEVICE
+    /**
+     * Set ISP initial statistics windows to the full sensor area.
+     */
+    esp_cam_sensor_format_t sensor_format;
+    if (esp_cam_sensor_get_format(sensor, &sensor_format) != ESP_OK) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    esp_video_isp_video_device_set_stats_windows(0, 0, sensor_format.width - 1, sensor_format.height - 1);
+#endif
 
     csi_video = heap_caps_calloc(1, sizeof(struct csi_video), MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
     if (!csi_video) {

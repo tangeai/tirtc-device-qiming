@@ -1,0 +1,420 @@
+{
+  "files": {
+    "components/esp_ipa/lib/esp32p4/v5.4-/libesp_ipa.a": {
+      "bytes": 270540,
+      "sha256": "24479f3ead34d067a8822113d55111bf93950f7aec86b1e8b7ed169b01bb14c6"
+    },
+    "components/esp_ipa/lib/esp32p4/v5.4-/libesp_ipa_p4_less_v3.a": {
+      "bytes": 270540,
+      "sha256": "24479f3ead34d067a8822113d55111bf93950f7aec86b1e8b7ed169b01bb14c6"
+    },
+    "components/esp_ipa/lib/esp32p4/v5.5/libesp_ipa.a": {
+      "bytes": 270700,
+      "sha256": "52491dcf1da82f914824f0599a0270400d792f418c7593e77b546d89bf9cce50"
+    },
+    "components/esp_ipa/lib/esp32p4/v5.5/libesp_ipa_p4_less_v3.a": {
+      "bytes": 270528,
+      "sha256": "877e9fc107b242dad1acad32b9113be1fe4fdd49d807f5caaac5b93126d11b25"
+    },
+    "components/esp_ipa/lib/esp32p4/v6.0+/libesp_ipa.a": {
+      "bytes": 261928,
+      "sha256": "541ad677c9f8a594b113af95fc6755f7ea2afe85d016c3958e232cd10bf5c083"
+    },
+    "components/esp_ipa/lib/esp32p4/v6.0+/libesp_ipa_newlib.a": {
+      "bytes": 261212,
+      "sha256": "1ee8e63841091b46603d0b397868160b928700daba974503f043fccb956d966f"
+    },
+    "components/esp_ipa/lib/esp32p4/v6.0+/libesp_ipa_p4_less_v3.a": {
+      "bytes": 262484,
+      "sha256": "0733b4b98225c930dccb3a21ce24a1ce265e572a6e16e5b9c0410a91922ac8d2"
+    },
+    "components/esp_ipa/lib/esp32p4/v6.0+/libesp_ipa_p4_less_v3_newlib.a": {
+      "bytes": 261772,
+      "sha256": "f75e7ebd81f2bc82b7f5c6f4455386fa438bcd5dc4289cc83f55120a80f516b3"
+    },
+    "components/espressif__esp-dl/fbs_loader/lib/esp32/libfbs_model.a": {
+      "bytes": 4035866,
+      "sha256": "ec2c1bc5c7ddbb25b96b1690834b9a47e87c28af1ea14707a7cf3a871f4d7ea9"
+    },
+    "components/espressif__esp-dl/fbs_loader/lib/esp32c2/libfbs_model.a": {
+      "bytes": 4378350,
+      "sha256": "4813c2f71677805c0acf95ef8a4de8df0a069edabe7db0d32cd4e690d8b4074b"
+    },
+    "components/espressif__esp-dl/fbs_loader/lib/esp32c3/libfbs_model.a": {
+      "bytes": 4378358,
+      "sha256": "b4364343e8cf36507319acc5904f3a80cf36dcc4eb334ade3193b298b26caf14"
+    },
+    "components/espressif__esp-dl/fbs_loader/lib/esp32c5/libfbs_model.a": {
+      "bytes": 4414266,
+      "sha256": "2c798568c1c4b802f4f63a9ec9c46b2dce02a983f591b7285dcf2b5d7d51d600"
+    },
+    "components/espressif__esp-dl/fbs_loader/lib/esp32c6/libfbs_model.a": {
+      "bytes": 4378402,
+      "sha256": "01585b61b26561b5c789692865765871ac048f68fc06f6b0b24c7b7fda73de2b"
+    },
+    "components/espressif__esp-dl/fbs_loader/lib/esp32p4/libfbs_model.a": {
+      "bytes": 4439506,
+      "sha256": "bcb37c1364fa840e40071257339cf4d439b4956dc0b65e6fefb76eb51b836c2d"
+    },
+    "components/espressif__esp-dl/fbs_loader/lib/esp32s2/libfbs_model.a": {
+      "bytes": 4073554,
+      "sha256": "e8297da96aefb2dcb460d4525a40c42670dbcf6f004bf198d7217a35a0fdd535"
+    },
+    "components/espressif__esp-dl/fbs_loader/lib/esp32s3/libfbs_model.a": {
+      "bytes": 4028446,
+      "sha256": "bb5b6ead89ce711cea218eca71070d2a5c70e35416c07109bdb467e35cec8234"
+    },
+    "components/espressif__esp-dl/fbs_loader/lib/esp32s31/libfbs_model.a": {
+      "bytes": 7112286,
+      "sha256": "389baae63b14c95cbe7fe4c5f582e22ec5644fef0ddb5e80ab9c641c1f4179d4"
+    },
+    "components/espressif__esp-sr/esp-tts/esp_tts_chinese/esp32p4/libesp_tts_chinese.a": {
+      "bytes": 628008,
+      "sha256": "bdc2c96c1a672e6b055d52924e248a2b12083aaeaff3e6ab4fe1793ddb7b8758"
+    },
+    "components/espressif__esp-sr/esp-tts/esp_tts_chinese/esp32p4/libvoice_set_xiaole.a": {
+      "bytes": 4628016,
+      "sha256": "44d051e7bdd867915b5d361c9ebc7bad5bfa35792ff752597290d535ad33ef95"
+    },
+    "components/espressif__esp-sr/lib/esp32p4/libc_speech_features.a": {
+      "bytes": 511290,
+      "sha256": "5e8b448990b4174c55a1b6007d271a1f4325300ef8b26eb44d283dde5928b4fc"
+    },
+    "components/espressif__esp-sr/lib/esp32p4/libdl_lib.a": {
+      "bytes": 4413266,
+      "sha256": "e3eb0639b28340c19460d787d36c120e0817fe3948d3df57d0c489cfd95b55df"
+    },
+    "components/espressif__esp-sr/lib/esp32p4/libesp_audio_front_end.a": {
+      "bytes": 717588,
+      "sha256": "5af2bf3dcad2a184586c60450c1175afbacb06bddfc27cd7ed379d7ad11de22a"
+    },
+    "components/espressif__esp-sr/lib/esp32p4/libesp_audio_processor.a": {
+      "bytes": 6243788,
+      "sha256": "45d203383c9b59eef5435af6cfbfaa4c065c02f086567d4af8b7c4c95f44dce5"
+    },
+    "components/espressif__esp-sr/lib/esp32p4/libflite_g2p.a": {
+      "bytes": 2821878,
+      "sha256": "bfd6434d325e0f64982990f6c43847cb7dfc2a3aa6b1c46f063e0e7a58b1045c"
+    },
+    "components/espressif__esp-sr/lib/esp32p4/libfst.a": {
+      "bytes": 730406,
+      "sha256": "37a0e6c8e4253a357f83624d164433d63d5a232879f64b3f2d6f00885e5ac266"
+    },
+    "components/espressif__esp-sr/lib/esp32p4/libhufzip.a": {
+      "bytes": 328210,
+      "sha256": "d1726e26438636df69cdf7a398128d19e9a3874eb5e82439d067fda2f9ce5215"
+    },
+    "components/espressif__esp-sr/lib/esp32p4/libmultinet.a": {
+      "bytes": 1115414,
+      "sha256": "fadbbae0da922ec73beb873902a1ef291f4c91a7e809359a51ed42cc887f57f1"
+    },
+    "components/espressif__esp-sr/lib/esp32p4/libnsnet.a": {
+      "bytes": 346598,
+      "sha256": "f014d23150f47b8301722ede9c70d065713575a921cb73a577842ff81957fa2b"
+    },
+    "components/espressif__esp-sr/lib/esp32p4/libnsnet3.a": {
+      "bytes": 1559210,
+      "sha256": "7dcc1251abad36474a8bf53696e263e30f8c9fa70056e59cae70488d500d84f4"
+    },
+    "components/espressif__esp-sr/lib/esp32p4/libvadnet.a": {
+      "bytes": 221288,
+      "sha256": "394e088c24ed3e8cfdfa39134ba14bbbdf5a0e11d49d139757b6138bee63408f"
+    },
+    "components/espressif__esp-sr/lib/esp32p4/libwakenet.a": {
+      "bytes": 1832638,
+      "sha256": "fc32ac1a78f67c7c2ba24fdbf98e06d4f6d34a2870e64654df72bfbbf9127ae5"
+    },
+    "components/espressif__esp_codec_dev/device/zl38063/firmware/libfirmware.a": {
+      "bytes": 114686,
+      "sha256": "032ef57d40aad4e365b270658cb8dd7bc819202b43ec8793bed29df1b93981ca"
+    },
+    "components/espressif__esp_h264/sw/libs/esp32p4/libopenh264.a": {
+      "bytes": 15741320,
+      "sha256": "0728f54e525d5614ade51ac6243673ba6121c3cfd086683db29fe6718437a456"
+    },
+    "components/espressif__esp_h264/sw/libs/esp32p4/libtinyh264.a": {
+      "bytes": 2710134,
+      "sha256": "53087c74466d351148b15c827ebec578df27e2561b60e7724f509966d51ab4b9"
+    },
+    "components/espressif__esp_h264/sw/libs/esp32p4_less_v3/libopenh264.a": {
+      "bytes": 15806860,
+      "sha256": "580a6b11627f0e0edf00494897bfa1b24e14aa852addad7299cf52d908c7e003"
+    },
+    "components/espressif__esp_h264/sw/libs/esp32p4_less_v3/libtinyh264.a": {
+      "bytes": 2719226,
+      "sha256": "a3463b9114e888edb5e78f73348c7305209a55eb721c20a9e7388a4eb94425a7"
+    },
+    "components/espressif__esp_h264/sw/libs/esp32s3/libopenh264.a": {
+      "bytes": 8981656,
+      "sha256": "cfc9a80a687abf2a120b61b01a74e8459ba394630af8076236cf9b6de76fab9e"
+    },
+    "components/espressif__esp_h264/sw/libs/esp32s3/libtinyh264.a": {
+      "bytes": 1492506,
+      "sha256": "4bac9dd273cd2b4d1734a866a8399acc0c69fb2099e28cc995467f40934fe6f6"
+    },
+    "components/espressif__esp_h264/sw/libs/esp32s31/libopenh264.a": {
+      "bytes": 15739780,
+      "sha256": "f3a1b340c7e81db3c509c35b96bf94c88e689ee750b9bca13ea226d2e5efb1dd"
+    },
+    "components/espressif__esp_h264/sw/libs/esp32s31/libtinyh264.a": {
+      "bytes": 2711006,
+      "sha256": "a8b3d56882971c78ebee585a22e336ee64e35279f9553b71aa186e5ee1bf3643"
+    },
+    "components/espressif__esp_h264/sw/libs/esp32s31_esp_c/libopenh264.a": {
+      "bytes": 15740192,
+      "sha256": "38390e6e04fb339b85751aca8148fa949d471be3d75de0e10cc4eb4c0cddb2c3"
+    },
+    "components/espressif__esp_h264/sw/libs/esp32s31_esp_c/libtinyh264.a": {
+      "bytes": 2690474,
+      "sha256": "48d3e90df1c964d8a3b39a7739bded9af98b0b0a35a18fa0a632943e73142722"
+    },
+    "components/espressif__esp_lvgl_port/docs/frame_buffer_settings.png": {
+      "bytes": 18224,
+      "sha256": "ca4b66bc6f70665f3fa15b0028ba3f89d241a2a8e609520549afb2326f6d630c"
+    },
+    "components/espressif__esp_lvgl_port/examples/rgb_lcd/main/images/esp_logo.png": {
+      "bytes": 6639,
+      "sha256": "7285c480c14d3899e09890551cfd9b7bc701a07a6f8216ec878f1347c8ceac4a"
+    },
+    "components/espressif__esp_lvgl_port/examples/touchscreen/main/images/esp_logo.png": {
+      "bytes": 6639,
+      "sha256": "7285c480c14d3899e09890551cfd9b7bc701a07a6f8216ec878f1347c8ceac4a"
+    },
+    "components/espressif__esp_lvgl_port/images/img_cursor.png": {
+      "bytes": 1810,
+      "sha256": "30766176860fdf04f2e41800b590bc34a706a5b9dfe0502bd5a20d5c1e406222"
+    },
+    "components/espressif__esp_lvgl_port/images/img_cursor_20px.png": {
+      "bytes": 1607,
+      "sha256": "8e204d096139a5222a8757911befb0a7abaa1ca21f2606dde36c83a02d07b492"
+    },
+    "components/espressif__esp_video/examples/simple_video_server/frontend/gzipped/assets/index.css.gz": {
+      "bytes": 45390,
+      "sha256": "c56622599247e8840ec3211b9727de2379d31836fa4e0a8c7b806cafacaffe73"
+    },
+    "components/espressif__esp_video/examples/simple_video_server/frontend/gzipped/assets/index.js.gz": {
+      "bytes": 108125,
+      "sha256": "91927da817a2fbeee4df81ef965089e3e7cd35857dab1ff588516c3db1602208"
+    },
+    "components/espressif__esp_video/examples/simple_video_server/frontend/gzipped/favicon.ico.gz": {
+      "bytes": 2685,
+      "sha256": "f43180996d22c02ff5f1544517f090e3ff2cf806d717c8cefb031cc2b1429cd7"
+    },
+    "components/espressif__esp_video/examples/simple_video_server/frontend/gzipped/index.html.gz": {
+      "bytes": 272,
+      "sha256": "3ca2e79e8ae166386430959551a4606aefce7475c5c899f3d04a09c5daf99484"
+    },
+    "components/espressif__esp_video/examples/simple_video_server/frontend/gzipped/loading.jpg.gz": {
+      "bytes": 23932,
+      "sha256": "4a4ccbb9ad478ca813772aae819e9ea11715e65fcccac34850ccd79c47dd665e"
+    },
+    "components/espressif__esp_video/examples/simple_video_server/frontend/public/favicon.ico": {
+      "bytes": 2662,
+      "sha256": "900dd9ecf908f173d241bbf0fd2b73cd26a9bad506fe368ad927d66316e6254e"
+    },
+    "components/espressif__esp_video/examples/simple_video_server/frontend/public/loading.jpg": {
+      "bytes": 34866,
+      "sha256": "bdb899b70f576fab923b35e6107151404e4f9f074d8cbd9a19712edb167f349f"
+    },
+    "components/espressif__esp_video/examples/simple_video_server/pic/camera_web_pic.png": {
+      "bytes": 646536,
+      "sha256": "ab0f133caf3c1a2bd130c7a17f1ccfdcf25776db7bd27c67a3ae284cca917d05"
+    },
+    "components/starter_product/assets/door-v4/back-28.svg": {
+      "bytes": 467,
+      "sha256": "255b5c20bb088036990dee340472661fbae26c3ad995993d7595ec275cfde1d7"
+    },
+    "components/starter_product/assets/door-v4/back-36.svg": {
+      "bytes": 437,
+      "sha256": "3267e632817b62e5f1daecb095e5f70ddf9188e7d7d55b85ba4502278d9aad49"
+    },
+    "components/starter_product/assets/door-v4/call-online-8.svg": {
+      "bytes": 292,
+      "sha256": "0043114d68e89c576cfb931bc46539e4126e40220c1959c973c1eafd15058ed6"
+    },
+    "components/starter_product/assets/door-v4/circle-action-72.svg": {
+      "bytes": 380,
+      "sha256": "c8805fba1ac47a1287d24dbd3337ef51ef8a8dc6f656e12357b38495803aa5e5"
+    },
+    "components/starter_product/assets/door-v4/circle-incoming-action-72.svg": {
+      "bytes": 380,
+      "sha256": "c8805fba1ac47a1287d24dbd3337ef51ef8a8dc6f656e12357b38495803aa5e5"
+    },
+    "components/starter_product/assets/door-v4/circle-incoming-red-72.svg": {
+      "bytes": 380,
+      "sha256": "ea5b3ae820063dfaf64a22c28c825028a11b9b8d6d45cdbdfa5820cfe0f11f45"
+    },
+    "components/starter_product/assets/door-v4/circle-monitor-action-72.svg": {
+      "bytes": 380,
+      "sha256": "c8805fba1ac47a1287d24dbd3337ef51ef8a8dc6f656e12357b38495803aa5e5"
+    },
+    "components/starter_product/assets/door-v4/circle-monitor-neutral-72.svg": {
+      "bytes": 400,
+      "sha256": "fef2c7225a3ecd01d67333731d47fef275c011d67fdf9569dc2b6162e182565a"
+    },
+    "components/starter_product/assets/door-v4/circle-neutral-72.svg": {
+      "bytes": 364,
+      "sha256": "c3fcf39dedc96d16aebf3921330c48910873637c4eee2c34e368434a5b7abd0c"
+    },
+    "components/starter_product/assets/door-v4/circle-red-72.svg": {
+      "bytes": 380,
+      "sha256": "ea5b3ae820063dfaf64a22c28c825028a11b9b8d6d45cdbdfa5820cfe0f11f45"
+    },
+    "components/starter_product/assets/door-v4/close-28.svg": {
+      "bytes": 751,
+      "sha256": "ce99dad31b7256c5f0313ffdcb58b0d07239e8fd158b8ecb49cd123a5be37b5b"
+    },
+    "components/starter_product/assets/door-v4/door_v4_wallpaper.rgb565": {
+      "bytes": 1228800,
+      "sha256": "bc65dd319a1c7b4e83ea141dc18596c62225ee2b2335fb3226cd4a953c722fc1"
+    },
+    "components/starter_product/assets/door-v4/failure-52.svg": {
+      "bytes": 757,
+      "sha256": "b8a529853e5803244099318f6b0e4d8193abfe5427b1dd409a25d06ba9a6b41f"
+    },
+    "components/starter_product/assets/door-v4/hangup-36.svg": {
+      "bytes": 1466,
+      "sha256": "5c09b788732b09059a6ae65d1047948d114fdd892db73588ba400760e060ab41"
+    },
+    "components/starter_product/assets/door-v4/incoming-8.svg": {
+      "bytes": 292,
+      "sha256": "0043114d68e89c576cfb931bc46539e4126e40220c1959c973c1eafd15058ed6"
+    },
+    "components/starter_product/assets/door-v4/key-28.svg": {
+      "bytes": 1642,
+      "sha256": "67030b23982003fff8ff16addf280c9687489383350e3032abdc5533f9c8ee04"
+    },
+    "components/starter_product/assets/door-v4/key-36.svg": {
+      "bytes": 1479,
+      "sha256": "5dd13d5e68b4a9a0f6e0908f601e1694bddc679a3d62b71a52d3dc6716679ec8"
+    },
+    "components/starter_product/assets/door-v4/key-call-36.svg": {
+      "bytes": 1479,
+      "sha256": "5dd13d5e68b4a9a0f6e0908f601e1694bddc679a3d62b71a52d3dc6716679ec8"
+    },
+    "components/starter_product/assets/door-v4/key-monitor-36.svg": {
+      "bytes": 1479,
+      "sha256": "5dd13d5e68b4a9a0f6e0908f601e1694bddc679a3d62b71a52d3dc6716679ec8"
+    },
+    "components/starter_product/assets/door-v4/knob-20.svg": {
+      "bytes": 261,
+      "sha256": "c29b2fd51ee520d6816ccadd2c3773254085c1385977da71bf7b955f1732b936"
+    },
+    "components/starter_product/assets/door-v4/lock-32.svg": {
+      "bytes": 1130,
+      "sha256": "db75c907f018f44f1e3c4db0875f78598ea9ac5459bb229b19dce945bda8e53c"
+    },
+    "components/starter_product/assets/door-v4/mic-36.svg": {
+      "bytes": 837,
+      "sha256": "aeaf2ca824c5b3c67adaf5580be671e2df2485a871a3a53b7079c17647b23a1e"
+    },
+    "components/starter_product/assets/door-v4/online-8.svg": {
+      "bytes": 256,
+      "sha256": "978822f8482f10f1227ca0af91f042a77f421846d08d55b4569652d77af1bdf2"
+    },
+    "components/starter_product/assets/door-v4/phone-36.svg": {
+      "bytes": 1135,
+      "sha256": "a4d3edeceb7f55ed819b23e950da912ff5bc2c79996d79f0dd3716f15e20d07b"
+    },
+    "components/starter_product/assets/door-v4/video-36.svg": {
+      "bytes": 934,
+      "sha256": "cc997afd0377fd37c670cac0a08f1c2d13f54741c5bfc7f10ef889f25bfebe9a"
+    },
+    "components/starter_product/assets/door-v4/volume-36.svg": {
+      "bytes": 1558,
+      "sha256": "7d7643ba105ec154fd05ec44aa3bad740e23ace64bf943e573f29597d556fc86"
+    },
+    "components/starter_product/assets/door-v4/wallpaper.png": {
+      "bytes": 1992213,
+      "sha256": "778d006e36c8fd11e45ae210108d499bd1bc25c72ca6f630c8b4123cf4d8a76f"
+    },
+    "components/starter_product/assets/door-v4/wifi-24.svg": {
+      "bytes": 909,
+      "sha256": "129a40936d880b0489afee890d2183c293d5c2116ac3c063878609206dcf6680"
+    },
+    "components/starter_product/assets/fonts/door_fonts_preview.png": {
+      "bytes": 50325,
+      "sha256": "f0e243cfb7fdef577cf44725f5d1b7fbde7cbe74d8ebd1678898a613229a8a4d"
+    },
+    "components/starter_product/assets/fonts/inter/Inter.ttf": {
+      "bytes": 876576,
+      "sha256": "29160a80ff49ddcab2c97711247e08b1fab27a484a329ce8b813d820dc559031"
+    },
+    "components/starter_product/assets/fonts/notosanssc-original/NotoSansSC[wght].ttf": {
+      "bytes": 17772300,
+      "sha256": "a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da"
+    },
+    "components/starter_product/assets/phone_shortcut.png": {
+      "bytes": 7925,
+      "sha256": "6c0bc141933f0dadb442b905dcd30bf4acc174ac99fbbb53a94f1e44f34b8706"
+    },
+    "components/starter_product/assets/prompts/ai_ack_female_8k.wav": {
+      "bytes": 19628,
+      "sha256": "1f6b6755ef7420e491e0b9f7c9d4893c768a21b2547a6cd402d6a94d7379f547"
+    },
+    "components/starter_product/assets/prompts/ai_ack_male_8k.wav": {
+      "bytes": 25388,
+      "sha256": "0c70005175fa5228cb0d99c256d82a39cb6b3c9177b4cee41729b5bf7f15615f"
+    },
+    "components/starter_product/assets/rings/kids_watch_incoming_tiny.wav": {
+      "bytes": 20524,
+      "sha256": "b0032215edc26d08136746093bb8e7cf88e8a105b6c2305b5ec5be97b2b19137"
+    },
+    "components/starter_product/assets/rings/kids_watch_outgoing_tiny.wav": {
+      "bytes": 14924,
+      "sha256": "7716d1f060ce7e23a63ffcb404d584cb3ec7b05527f6b4aeeefe3c623bfddb36"
+    },
+    "components/starter_product/src/door_v4_assets.c": {
+      "bytes": 600141,
+      "sha256": "b2a50b56c1243d02174d09ae3ff0b15767117fd064ee14cfcbfabdfcb314b5f1"
+    },
+    "components/starter_product/src/ui_font_cn_18.c": {
+      "bytes": 12574199,
+      "sha256": "979aad8574ed907904ec0414582a832fd1320a986f823146bdc2d9ef582d86c0"
+    },
+    "components/starter_product/src/ui_font_cn_18_supplement.c": {
+      "bytes": 106150,
+      "sha256": "47cf7f272bccb2067fab2f6203e5437829bf147832dce310c5584a8bfb5d3b7e"
+    },
+    "components/starter_product/src/ui_font_door_18.c": {
+      "bytes": 274489,
+      "sha256": "2951caebef04fdee824e2bb3c9e879fa20a56073929dd0c270c1a8378f91763e"
+    },
+    "components/starter_product/src/ui_font_door_24.c": {
+      "bytes": 455272,
+      "sha256": "dc592bbe1ced1cfcccc737dff8442cccb35fcacff7c20755baf4d4ff32e9e452"
+    },
+    "components/starter_product/src/ui_font_door_26.c": {
+      "bytes": 521797,
+      "sha256": "4ce8c584b753e1af2e6cb1e43476a020e69bca5f0a2cd3f2e1d5dc1273b3257f"
+    },
+    "components/starter_product/src/ui_font_door_32.c": {
+      "bytes": 761360,
+      "sha256": "3a9face2d8d5167684653878de18e1783e228da0657835cb6e42195dbf364898"
+    },
+    "components/starter_product/src/ui_font_door_body_24.c": {
+      "bytes": 446998,
+      "sha256": "f2155dd5dc663e291178ec1139e4c8cccb6acc927f8ea567c09c9a575abf0745"
+    },
+    "components/starter_product/src/ui_font_door_clock_128.c": {
+      "bytes": 179410,
+      "sha256": "f07592f9fa48190b6fc82f09492c0520dff78bb8936da1af3b6c7e35acee5d39"
+    },
+    "components/starter_product/src/ui_font_pinyin_18.c": {
+      "bytes": 26595,
+      "sha256": "7d3cc498dc26063a9388da0d5ac55ab391e7c3d1dc56ce6f124f5c2cac15dd49"
+    },
+    "components/starter_voice/model/head.h": {
+      "bytes": 17650,
+      "sha256": "cc0364fa603a43c90d9de0b0fc39587c7c4d3350c3d1537b7018cf3a923d1a1e"
+    },
+    "components/starter_voice/model/nihaoxiaotai.tflite": {
+      "bytes": 67336,
+      "sha256": "1dcfe29a10733ec272854bfbafb8a231f10bf3b0399cf6192cc08b38006fac78"
+    },
+    "components/tirtc_sdk/lib/esp32p4/libTiRTC.a": {
+      "bytes": 2192376,
+      "sha256": "554295a06173478ba51cb6fc4fc42a09431787377aef7e4ded4ab17165f39cac"
+    }
+  }
+}

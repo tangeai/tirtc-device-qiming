@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <stdbool.h>
 #include "sdkconfig.h"
 #include "esp_h264_enc_param_hw.h"
 #include "h264_hal.h"
@@ -39,6 +40,7 @@ typedef struct esp_h264_set_cfg {
     uint8_t               fps;      /*<! Frames per second */
     uint32_t              bitrate;  /*<! Bit per second */
     esp_h264_raw_format_t pic_type; /*<! Picture type */
+    esp_h264_enc_vui_color_t vui_color;
 } esp_h264_enc_hw_param_cfg_t;
 
 /**
@@ -77,7 +79,15 @@ esp_h264_err_t esp_h264_enc_hw_del_param(esp_h264_enc_param_hw_handle_t handle);
  */
 esp_h264_err_t esp_h264_enc_hw_get_mutex(esp_h264_enc_param_hw_handle_t handle, esp_h264_mutex_t *out_mutex);
 
-/** Consume a pending IDR request once, at the encoder's frame boundary. */
+/**
+ * @brief  Take and clear the pending force-IDR request
+ *
+ * @param[in]  handle  Hardware H.264 encoder parameter set handle
+ *
+ * @return
+ *       - true   Force IDR was requested
+ *       - false  No pending force-IDR request
+ */
 bool esp_h264_enc_hw_take_force_idr(esp_h264_enc_param_hw_handle_t handle);
 
 /**
@@ -94,14 +104,16 @@ esp_h264_err_t esp_h264_enc_hw_get_qp_init(esp_h264_enc_param_hw_handle_t handle
 /**
  * @brief  Get sequence parameter set (SPS) and picture parameter set (PPS)
  *
- * @param[in]   handle           Hardware H.264 encoder parameter set handle
- * @param[out]  out_nal_buf      The buffer is saved sequence parameter set (SPS) and picture parameter set (PPS)
- * @param[out]  out_nal_bit_len  The bit length of `nal_buf`
+ * @param[in]   handle            Hardware H.264 encoder parameter set handle
+ * @param[out]  out_nal_buf       The buffer is saved sequence parameter set (SPS) and picture parameter set (PPS)
+ * @param[in]   out_nal_buf_len   Byte length of `out_nal_buf`
+ * @param[out]  out_nal_bit_len   The bit length of SPS+PPS written to `out_nal_buf`
  *
  * @return
- *       - ESP_H264_ERR_OK  Succeeded
+ *       - ESP_H264_ERR_OK   Succeeded
+ *       - ESP_H264_ERR_MEM  `out_nal_buf` is too small
  */
-esp_h264_err_t esp_h264_enc_hw_get_nal(esp_h264_enc_param_hw_handle_t handle, uint8_t *out_nal_buf, uint16_t *out_nal_bit_len);
+esp_h264_err_t esp_h264_enc_hw_get_nal(esp_h264_enc_param_hw_handle_t handle, uint8_t *out_nal_buf, uint32_t out_nal_buf_len, uint16_t *out_nal_bit_len);
 
 /**
  * @brief  Configure reference and de-blocking DMA descriptor

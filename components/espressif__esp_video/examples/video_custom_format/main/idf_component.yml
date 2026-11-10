@@ -1,3 +1,6 @@
 dependencies:
-  esp_video: {}
-  idf: '>=5.3'
+  idf: ">=5.3"
+  esp_video:
+    override_path: "../../../"
+  example_video_common:
+    override_path: "../../common_components/example_video_common"

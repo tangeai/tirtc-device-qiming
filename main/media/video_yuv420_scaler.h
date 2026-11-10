@@ -17,6 +17,7 @@ typedef struct {
     uint16_t input_height;
     uint16_t output_width;
     uint16_t output_height;
+    bool rotate_ccw90;
 } video_yuv420_scaler_config_t;
 
 esp_err_t video_yuv420_scaler_create(const video_yuv420_scaler_config_t *config,

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "media_tuning.h"
+#include "hardware_board_config.h"
 
 /*
  * P4 downlink decode and presentation scheduling.
@@ -12,8 +13,13 @@
 
 #define CALL_VIDEO_DECODE_MAX_WIDTH         APP_MEDIA_CALL_VIDEO_WIDTH
 #define CALL_VIDEO_DECODE_MAX_HEIGHT        APP_MEDIA_CALL_VIDEO_HEIGHT
-#define CALL_VIDEO_RENDER_WIDTH             640U
-#define CALL_VIDEO_RENDER_HEIGHT            480U
+#define CALL_VIDEO_RENDER_WIDTH             HARDWARE_BOARD_VIDEO_RENDER_WIDTH
+#define CALL_VIDEO_RENDER_HEIGHT            HARDWARE_BOARD_VIDEO_RENDER_HEIGHT
+/* Independent JPEG frames need only writer/ready/LCD ownership, not the H264
+ * retransmission reservoir. Render them once at panel resolution. */
+#define CALL_VIDEO_MJPEG_RENDER_WIDTH       HARDWARE_BOARD_LCD_WIDTH
+#define CALL_VIDEO_MJPEG_RENDER_HEIGHT      HARDWARE_BOARD_LCD_HEIGHT
+#define CALL_VIDEO_MJPEG_OUTPUT_SLOT_COUNT  3U
 
 #define CALL_VIDEO_INPUT_SLOT_COUNT         24U
 #define CALL_VIDEO_INPUT_SLOT_CAPACITY      (256U * 1024U)
@@ -23,12 +29,18 @@
 #define CALL_VIDEO_SOURCE_CROP_HEIGHT       APP_MEDIA_CALL_VIDEO_HEIGHT
 #define CALL_VIDEO_DECODED_SLOT_COUNT       4U
 /*
- * Qiming renders 640x480 RGB565 frames, twice the bytes of the shared
- * 480x320 surface. Its DSI panel drains frames faster than the reference SPI
- * surface, so twelve retained RGB slots provide a bounded 7.0 MiB reservoir
- * while the 24-slot compressed queue absorbs TGTRP retransmission bursts.
+ * The severe 200 ms + 100 ms jitter + 5% loss regression peaked at eleven
+ * compressed frames in the periodic telemetry. A twelve-slot RGB pool still
+ * overflowed during shorter retransmit bursts that occur between samples, so
+ * retain twenty RGB slots. Dynamic 300 ms / 5% loss testing later measured
+ * 1.3-2.1 second TGTRP recovery bursts; sixteen compressed slots overflowed,
+ * forced an IDR wait, and repeatedly rebuilt the decoder. Twenty-four slots
+ * cover that measured 12 fps burst while keeping the call pool bounded. The
+ * pool is prewarmed once and retained to avoid runtime fragmentation; the
+ * system memory budget must still leave IPC/AI enough contiguous PSRAM for
+ * their camera paths.
  */
-#define CALL_VIDEO_OUTPUT_SLOT_COUNT        12U
+#define CALL_VIDEO_OUTPUT_SLOT_COUNT        20U
 
 #define CALL_VIDEO_TASK_STACK_SIZE          (16U * 1024U)
 #define CALL_VIDEO_MJPEG_TASK_STACK_SIZE    (8U * 1024U)
@@ -46,17 +58,17 @@
  * The helper settings are retained for controlled experiments, but the product
  * path stays single-task.
  */
-#define CALL_VIDEO_TASK_PRIORITY             15U
-#define CALL_VIDEO_INGRESS_TASK_PRIORITY      11U
+#define CALL_VIDEO_TASK_PRIORITY             5U
+#define CALL_VIDEO_INGRESS_TASK_PRIORITY      4U
 /* The P4 TinyH264 dual-task path can race inside its slice/deblock worker.
- * Dynamic call streams reproduced a load fault in GetChromaEdgeThresholds ->
+ * Dynamic 480x320 calls reproduced a load fault in GetChromaEdgeThresholds ->
  * h264bsdFilterPictureOneBlock -> filterThread even after lost phase
  * notifications were guarded. Keep one decoder owner until the prebuilt
  * TinyH264 implementation itself is fixed. */
 #define CALL_VIDEO_H264_DUAL_TASK_ENABLE      0U
 #define CALL_VIDEO_H264_HELPER_TASK_CORE      1U
-#define CALL_VIDEO_H264_HELPER_TASK_PRIORITY 17U
-#define CALL_VIDEO_CONVERT_TASK_PRIORITY      15U
+#define CALL_VIDEO_H264_HELPER_TASK_PRIORITY 5U
+#define CALL_VIDEO_CONVERT_TASK_PRIORITY      4U
 
 #define CALL_VIDEO_START_TIMEOUT_MS           5000U
 #define CALL_VIDEO_STOP_TIMEOUT_MS            3000U
@@ -84,30 +96,36 @@
 #define CALL_VIDEO_LATENCY_RECOVERY_DEPTH       12U
 #define CALL_VIDEO_LATENCY_RECOVERY_SAMPLES     8U
 #define CALL_VIDEO_LATENCY_RECOVERY_CLEAR_US    (CALL_VIDEO_TARGET_FRAME_INTERVAL_US * 6U)
-#define CALL_VIDEO_ADAPTIVE_PLAYOUT_GAP_FRAMES        4U
-#define CALL_VIDEO_ADAPTIVE_IMMEDIATE_GAP_FRAMES      6U
+#define CALL_VIDEO_ADAPTIVE_PLAYOUT_GAP_US      (CALL_VIDEO_TARGET_FRAME_INTERVAL_US * 4U)
+#define CALL_VIDEO_ADAPTIVE_IMMEDIATE_GAP_US    (CALL_VIDEO_TARGET_FRAME_INTERVAL_US * 6U)
 #define CALL_VIDEO_ADAPTIVE_CONFIRM_WINDOW_US   (2LL * 1000LL * 1000LL)
 #define CALL_VIDEO_ADAPTIVE_CONFIRM_SAMPLES     2U
 #define CALL_VIDEO_ADAPTIVE_PLAYOUT_HOLD_US     (8LL * 1000LL * 1000LL)
 #define CALL_VIDEO_ADAPTIVE_PLAYOUT_DEPTH       2U
-#define CALL_VIDEO_ADAPTIVE_PLAYOUT_MAX_DEPTH   10U
+#define CALL_VIDEO_ADAPTIVE_PLAYOUT_MAX_DEPTH   16U
 _Static_assert(CALL_VIDEO_INPUT_SLOT_COUNT >=
                    CALL_VIDEO_ADAPTIVE_PLAYOUT_MAX_DEPTH + 2U,
                "compressed input pool must absorb the maximum playout reserve");
-/* Inter-frame H264 always keeps access-unit order while its bounded reservoir
- * refills. MJPEG remains latest-frame in normal operation, but temporarily
- * preserves a recovery burst after a measured receive outage so independent
- * JPEG pictures are presented at the source cadence instead of back-to-back. */
-#define CALL_VIDEO_ADAPTIVE_REFILL_FPS_DELTA       1U
-#define CALL_VIDEO_ADAPTIVE_CRITICAL_FPS_DELTA     3U
-#define CALL_VIDEO_MJPEG_MIN_PLAYOUT_FPS            8U
-#define CALL_VIDEO_MJPEG_MAX_PLAYOUT_FPS            APP_MEDIA_WECHAT_VIDEO_FPS
-#define CALL_VIDEO_MJPEG_RATE_MIN_INTERVAL_US       40000U
-#define CALL_VIDEO_MJPEG_RATE_MAX_INTERVAL_US       250000U
-#define CALL_VIDEO_MJPEG_RATE_MIN_SAMPLES          12U
-_Static_assert(CALL_VIDEO_MJPEG_MIN_PLAYOUT_FPS <=
-                   CALL_VIDEO_MJPEG_MAX_PLAYOUT_FPS,
-               "MJPEG playout range is invalid");
+/* Keep the normal playout clock tied to the negotiated source cadence. The
+ * stable deadline intentionally alternates across the LVGL timer quantum
+ * instead of accumulating one timer tick of drift per frame. */
+#define CALL_VIDEO_ADAPTIVE_PLAYOUT_INTERVAL_US CALL_VIDEO_TARGET_FRAME_INTERVAL_US
+/* A weak-network reservoir can only refill when presentation is slower than
+ * the active source. These rates used to be fixed at 14/12 fps for a 15 fps
+ * stream; after the call profile moved to 12 fps that made the low-watermark
+ * path drain at 14 fps and left the critical path unable to refill. Derive the
+ * recovery cadence from the source so normal playout stays unchanged while a
+ * confirmed retransmission burst temporarily uses 11/9 fps at 12 fps input. */
+#define CALL_VIDEO_ADAPTIVE_REFILL_FPS            \
+    ((APP_MEDIA_CALL_VIDEO_FPS > 1U) ? (APP_MEDIA_CALL_VIDEO_FPS - 1U) : 1U)
+#define CALL_VIDEO_ADAPTIVE_CRITICAL_FPS          \
+    ((APP_MEDIA_CALL_VIDEO_FPS > 3U) ? (APP_MEDIA_CALL_VIDEO_FPS - 3U) : 1U)
+#define CALL_VIDEO_ADAPTIVE_REFILL_INTERVAL_US    \
+    ((1000000U + CALL_VIDEO_ADAPTIVE_REFILL_FPS - 1U) / \
+     CALL_VIDEO_ADAPTIVE_REFILL_FPS)
+#define CALL_VIDEO_ADAPTIVE_CRITICAL_INTERVAL_US  \
+    ((1000000U + CALL_VIDEO_ADAPTIVE_CRITICAL_FPS - 1U) / \
+     CALL_VIDEO_ADAPTIVE_CRITICAL_FPS)
 /* The short window applies only after the compressed input queue is empty. RTC
  * input has a higher priority than the decoder, so delaying every backlogged
  * access unit merely accumulates latency on high-motion frames. The longer

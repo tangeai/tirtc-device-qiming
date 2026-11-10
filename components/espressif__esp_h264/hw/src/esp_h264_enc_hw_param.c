@@ -6,7 +6,7 @@
 
 #include <stdio.h>
 #include <string.h>
-#include "esp_private/esp_cache_private.h"
+#include <stdbool.h>
 #include "esp_h264_alloc.h"
 #include "esp_h264_enc_hw_param.h"
 
@@ -14,12 +14,13 @@ static const char *TAG = "H264_ENC.HW.SET";
 
 #define ESP_H264_ROI_SUP_NUM    (8)
 #define ESP_H264_REDUNDANT_BYTE (8 + 64)
-#define SPS_PPS_BUF_SIZE        (100)
+#define SPS_PPS_BUF_SIZE        (160)
 
 typedef struct esp_h264_param {
     esp_h264_enc_param_hw_t    hw_base;
     esp_h264_set_dev_t         device;
     uint8_t                    fps;
+    esp_h264_enc_vui_color_t    vui_color;
     uint8_t                    gop;
     bool                       force_idr;
     esp_h264_rc_hd_t           rc_hd;
@@ -36,7 +37,6 @@ typedef struct esp_h264_param {
     uint32_t                   mvm_buf_len;
     uint8_t                   *db;
     uint8_t                   *ref;
-    uint8_t                   *ref_allocation;
     h264_dma_desc_t           *dsc_ref;
     h264_dma_desc_t           *dsc_db[4];
     h264_dma_desc_t           *dsc_mvm;
@@ -98,12 +98,20 @@ static esp_h264_err_t set_fps(esp_h264_enc_param_handle_t handle, uint8_t fps)
 {
     esp_h264_enc_param_hw_handle_t param_base = __containerof(handle, esp_h264_enc_param_hw_t, base);
     esp_h264_param_t *param = __containerof(param_base, esp_h264_param_t, hw_base);
+
+    if (fps == 0) {
+        return ESP_H264_ERR_ARG;
+    }
     param->fps = fps;
     esp_h264_mutex_lock(param->mutex, ESP_H264_MAX_DELAY);
     if (param->rc_hd) {
         esp_h264_enc_hw_rc_set_bt_fps(param->rc_hd, param->bitrate, param->fps);
     }
-    esp_h264_enc_set_sps(param->nal_buf, param->nal_buf_len, param->height, param->width, param->fps);
+    /* Regenerate full SPS+PPS blob; SPS length can change (e.g. VUI timing_info). */
+    param->nal_bit_len = esp_h264_enc_set_sps(param->nal_buf, param->nal_buf_len, param->height, param->width, param->fps, &param->vui_color);
+    param->nal_bit_len += esp_h264_enc_set_pps(param->nal_buf + (param->nal_bit_len >> 3),
+                          param->nal_buf_len - (param->nal_bit_len >> 3),
+                          param->qp_init, true);
     esp_h264_mutex_unlock(param->mutex);
     return ESP_H264_ERR_OK;
 }
@@ -278,88 +286,6 @@ static int max_refame_buffer_size(int16_t mb_width)
     return H264_DMA_3_LINES * H264_DMA_MACRO_SIZE * (H264_DMA_MACRO_SIZE + H264_DMA_HALF_MACRO_SIZE) * mb_width + HW_DMA_BUF_ALIGN_SIZE;
 }
 
-static uint8_t *alloc_reference_frame(int16_t mb_width,
-                                      uint32_t *actual_size,
-                                      uint8_t **allocation_base)
-{
-    size_t reference_size = (size_t)max_refame_buffer_size(mb_width);
-    *allocation_base = NULL;
-
-    /* MALLOC_CAP_CACHE_ALIGNED adds allocator-owned alignment slack. A block
-     * recovered after the decoder handoff can therefore be 64 bytes smaller
-     * than the next identical aligned request. For large reference frames,
-     * own a plain allocation and align the DMA pointer inside it. Reopening
-     * then requests exactly the same owner block size and remains repeatable. */
-    if (reference_size >= (64 * 1024)) {
-        size_t cache_alignment = 0U;
-        esp_cache_get_alignment(ESP_H264_MEM_INTERNAL, &cache_alignment);
-        if (cache_alignment < 16U) {
-            cache_alignment = 16U;
-        }
-
-        size_t payload_size = (size_t)H264_DMA_3_LINES * H264_DMA_MACRO_SIZE *
-                              (H264_DMA_MACRO_SIZE + H264_DMA_HALF_MACRO_SIZE) *
-                              (size_t)mb_width;
-        size_t owner_size = payload_size + cache_alignment - 1U;
-        uint8_t *owner = (uint8_t *)heap_caps_calloc(1, owner_size, ESP_H264_MEM_INTERNAL);
-        if (owner != NULL) {
-            uintptr_t aligned_addr = ALIGN_UP((uintptr_t)owner, cache_alignment);
-            uint8_t *ref = (uint8_t *)aligned_addr;
-            if ((size_t)(ref - owner) + payload_size <= owner_size) {
-                *allocation_base = owner;
-                *actual_size = (uint32_t)payload_size;
-                esp_h264_cache_check_and_writeback(ref, *actual_size);
-                ESP_LOGI(TAG,
-                         "reference frame owner ready: payload=%u owner=%u alignment=%u offset=%u",
-                         (unsigned)payload_size,
-                         (unsigned)owner_size,
-                         (unsigned)cache_alignment,
-                         (unsigned)(ref - owner));
-                return ref;
-            }
-            esp_h264_free(owner);
-        }
-    }
-
-    uint8_t *ref = (uint8_t *)esp_h264_aligned_calloc(
-        16,
-        1,
-        reference_size,
-        actual_size,
-        ESP_H264_MEM_INTERNAL);
-    if (ref != NULL) {
-        return ref;
-    }
-
-    /* A cache-aligned allocation reserves worst-case leading padding. After a
-     * decoder/encoder handoff the recovered block can be exactly the payload
-     * size while retaining its original cache alignment. Reuse that block only
-     * after checking the real pointer alignment; otherwise preserve the normal
-     * allocation failure rather than weakening DMA/cache guarantees. */
-    size_t cache_alignment = 0U;
-    esp_cache_get_alignment(ESP_H264_MEM_INTERNAL, &cache_alignment);
-    if (cache_alignment < 16U) {
-        cache_alignment = 16U;
-    }
-    size_t payload_size = (size_t)H264_DMA_3_LINES * H264_DMA_MACRO_SIZE *
-                          (H264_DMA_MACRO_SIZE + H264_DMA_HALF_MACRO_SIZE) *
-                          (size_t)mb_width;
-    size_t exact_size = ALIGN_UP(payload_size, cache_alignment);
-    ref = (uint8_t *)heap_caps_calloc(1, exact_size, ESP_H264_MEM_INTERNAL);
-    if (ref == NULL || ((uintptr_t)ref % cache_alignment) != 0U) {
-        esp_h264_free(ref);
-        return NULL;
-    }
-
-    *actual_size = (uint32_t)exact_size;
-    esp_h264_cache_check_and_writeback(ref, *actual_size);
-    ESP_LOGI(TAG,
-             "reused aligned reference frame block: bytes=%u alignment=%u",
-             (unsigned)*actual_size,
-             (unsigned)cache_alignment);
-    return ref;
-}
-
 static int max_db_buffer_size(int16_t mb_width, int16_t mb_height)
 {
     int buffer_size = mb_width * (mb_height - 1) * H264_DMA_DB_12_LINES_ROW_LENGTH
@@ -390,9 +316,7 @@ esp_h264_err_t esp_h264_enc_hw_del_param(esp_h264_enc_param_hw_handle_t handle)
         if (param->nal_buf) {
             esp_h264_free(param->nal_buf);
         }
-        if (param->ref_allocation) {
-            esp_h264_free(param->ref_allocation);
-        } else if (param->ref) {
+        if (param->ref) {
             esp_h264_free(param->ref);
         }
         if (param->db) {
@@ -436,17 +360,10 @@ esp_h264_err_t esp_h264_enc_hw_new_param(esp_h264_enc_hw_param_cfg_t *cfg, esp_h
     param->height = cfg->height;
     param->qp_init = (cfg->qp_min + cfg->qp_max) >> 1;
     param->fps = cfg->fps;
+    param->vui_color = cfg->vui_color;
     param->bitrate = cfg->bitrate;
     h264_hal_set_qp(param->device, param->qp_init);
     h264_hal_get_mbres(param->device, &param->mb_width, &param->mb_height);
-
-    /* The reference frame is the only mandatory large contiguous internal
-     * allocation. Secure it before the small RC/NAL objects can split a
-     * recovered encoder handoff block. */
-    param->ref = alloc_reference_frame(param->mb_width,
-                                       &actual_size,
-                                       &param->ref_allocation);
-    ESP_H264_GOTO_ON_FALSE(param->ref, ESP_H264_ERR_MEM, __exit__, TAG, "No memory for reference frame");
 
     /** Create RC handle */
     if (cfg->qp_min < cfg->qp_max) {
@@ -460,11 +377,15 @@ esp_h264_err_t esp_h264_enc_hw_new_param(esp_h264_enc_hw_param_cfg_t *cfg, esp_h
     param->nal_buf_len = SPS_PPS_BUF_SIZE;
     param->nal_buf = (uint8_t *)esp_h264_calloc_prefer(1, param->nal_buf_len, &actual_size, ESP_H264_MEM_INTERNAL, ESP_H264_MEM_SPIRAM);
     ESP_H264_GOTO_ON_FALSE(param->nal_buf, ESP_H264_ERR_MEM, __exit__, TAG, "No memory for NAL");
-    param->nal_bit_len = esp_h264_enc_set_sps(param->nal_buf, param->nal_buf_len, param->height, param->width, param->fps);
+    param->nal_bit_len = esp_h264_enc_set_sps(param->nal_buf, param->nal_buf_len, param->height, param->width, param->fps, &param->vui_color);
     param->nal_bit_len += esp_h264_enc_set_pps(param->nal_buf + (param->nal_bit_len >> 3), param->nal_buf_len - (param->nal_bit_len >> 3), param->qp_init, true);
 
-    /** Allocate DB memory */
-    param->db = (uint8_t *)esp_h264_calloc_prefer(1, max_db_buffer_size(param->mb_width, param->mb_height), &actual_size, ESP_H264_MEM_INTERNAL, ESP_H264_MEM_SPIRAM);
+    /** Allocated reference frame and DB memory (malloc: large buffers, no need to zero) */
+    /* The DMA line reference is cache-aligned and can reside in PSRAM. Keeping
+     * it internal prevents a portrait encoder from opening after UI/RTC start. */
+    param->ref = (uint8_t *)esp_h264_aligned_malloc(16, 1, max_refame_buffer_size(param->mb_width), &actual_size, ESP_H264_MEM_SPIRAM);
+    ESP_H264_GOTO_ON_FALSE(param->ref, ESP_H264_ERR_MEM, __exit__, TAG, "No memory for reference frame");
+    param->db = (uint8_t *)esp_h264_malloc_prefer(1, max_db_buffer_size(param->mb_width, param->mb_height), &actual_size, ESP_H264_MEM_SPIRAM, ESP_H264_MEM_INTERNAL);
     ESP_H264_GOTO_ON_FALSE(param->db, ESP_H264_ERR_MEM, __exit__, TAG, "No memory for data");
 
     /** Allocated descriptor memory*/
@@ -534,10 +455,15 @@ esp_h264_err_t esp_h264_enc_hw_get_qp_init(esp_h264_enc_param_hw_handle_t handle
     return ESP_H264_ERR_OK;
 }
 
-esp_h264_err_t esp_h264_enc_hw_get_nal(esp_h264_enc_param_hw_handle_t handle, uint8_t *out_nal_buf, uint16_t *out_nal_bit_len)
+esp_h264_err_t esp_h264_enc_hw_get_nal(esp_h264_enc_param_hw_handle_t handle, uint8_t *out_nal_buf, uint32_t out_nal_buf_len, uint16_t *out_nal_bit_len)
 {
     esp_h264_param_t *param = __containerof(handle, esp_h264_param_t, hw_base);
-    memcpy(out_nal_buf, param->nal_buf, param->nal_bit_len >> 3);
+    uint32_t nal_bytes = (uint32_t)(param->nal_bit_len >> 3);
+
+    if (nal_bytes > out_nal_buf_len) {
+        return ESP_H264_ERR_MEM;
+    }
+    memcpy(out_nal_buf, param->nal_buf, nal_bytes);
     *out_nal_bit_len = param->nal_bit_len;
     return ESP_H264_ERR_OK;
 }

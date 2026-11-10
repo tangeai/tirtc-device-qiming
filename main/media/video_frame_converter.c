@@ -21,6 +21,7 @@ struct video_frame_converter {
     portMUX_TYPE stats_lock;
     int32_t luma_terms[256];
     ppa_client_handle_t ppa_client;
+    ppa_client_handle_t ppa_fill_client;
     uint8_t *packed_yuv420;
     size_t packed_yuv420_size;
     video_frame_converter_stats_t stats;
@@ -709,6 +710,17 @@ esp_err_t video_frame_converter_create(const video_frame_converter_config_t *con
     if (handle->packed_yuv420 != NULL &&
         ppa_register_client(&ppa_config, &handle->ppa_client) == ESP_OK) {
         handle->last_mode = VIDEO_FRAME_CONVERTER_MODE_PPA;
+        const ppa_client_config_t fill_config = {
+            .oper_type = PPA_OPERATION_FILL,
+            .max_pending_trans_num = 1,
+            .data_burst_length = PPA_DATA_BURST_LENGTH_128,
+        };
+        esp_err_t fill_ret =
+            ppa_register_client(&fill_config, &handle->ppa_fill_client);
+        if (fill_ret != ESP_OK) {
+            ESP_LOGW(TAG, "PPA background fill unavailable: %s; CPU clear retained",
+                     esp_err_to_name(fill_ret));
+        }
     } else {
         heap_caps_free(handle->packed_yuv420);
         handle->packed_yuv420 = NULL;
@@ -741,6 +753,9 @@ void video_frame_converter_destroy(video_frame_converter_handle_t handle)
     }
     if (handle->ppa_client != NULL) {
         (void)ppa_unregister_client(handle->ppa_client);
+    }
+    if (handle->ppa_fill_client != NULL) {
+        (void)ppa_unregister_client(handle->ppa_fill_client);
     }
     heap_caps_free(handle->packed_yuv420);
     heap_caps_free(handle);
@@ -923,6 +938,34 @@ esp_err_t video_frame_converter_ouyy_evyy_to_rgb565(
     return ret;
 }
 
+static esp_err_t video_frame_clear_rgb565(video_frame_converter_handle_t handle,
+                                         uint16_t *output,
+                                         uint16_t width,
+                                         uint16_t height)
+{
+    const size_t output_size = (size_t)width * height * sizeof(*output);
+    if (handle->ppa_fill_client != NULL) {
+        /* Clear through DMA instead of dirtying and flushing an entire PSRAM
+         * viewport on the CPU. Blocking completion preserves the SRM dependency. */
+        const ppa_fill_oper_config_t fill = {
+            .out = {
+                .buffer = output,
+                .buffer_size = output_size,
+                .pic_w = width,
+                .pic_h = height,
+                .fill_cm = PPA_FILL_COLOR_MODE_RGB565,
+            },
+            .fill_block_w = width,
+            .fill_block_h = height,
+            .fill_color_val = 0,
+            .mode = PPA_TRANS_MODE_BLOCKING,
+        };
+        return ppa_do_fill(handle->ppa_fill_client, &fill);
+    }
+    memset(output, 0, output_size);
+    return esp_cache_msync(output, output_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+}
+
 static esp_err_t video_frame_convert_rgb565_ppa(video_frame_converter_handle_t handle,
                                                 const uint16_t *rgb565,
                                                 uint16_t source_width,
@@ -966,12 +1009,10 @@ static esp_err_t video_frame_convert_rgb565_ppa(video_frame_converter_handle_t h
                                      fit.offset_y);
     int64_t started_us = esp_timer_get_time();
     if (fit.render_width != output_width || fit.render_height != output_height) {
-        memset(output, 0, output_size);
-        ESP_RETURN_ON_ERROR(esp_cache_msync(output,
-                                            output_size,
-                                            ESP_CACHE_MSYNC_FLAG_DIR_C2M),
+        ESP_RETURN_ON_ERROR(video_frame_clear_rgb565(handle, output,
+                                                     output_width, output_height),
                             TAG,
-                            "sync PPA RGB565 letterbox background failed");
+                            "clear PPA RGB565 letterbox background failed");
     }
     int64_t prepared_us = esp_timer_get_time();
     const ppa_srm_oper_config_t operation = {

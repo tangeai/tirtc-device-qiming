@@ -1,0 +1,9 @@
+menu "WT99P461-S1 companion diagnostics"
+    config WT_C61_ALLOC_TRACE
+        bool "Record failed allocator caller sites"
+        default n
+        help
+            Diagnostic builds only. Record up to eight failed call sites using
+            bounded, allocation-free wrappers and the IDF 5.5.5 Wi-Fi OS adapter.
+            Does not change allocation results or reset failure counters.
+endmenu

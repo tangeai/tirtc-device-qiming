@@ -9,8 +9,12 @@ set(srcs "src/esp_video_buffer.c"
 
 set(include_dirs "include")
 set(priv_include_dirs "private_include")
-set(priv_requires "vfs")
+set(priv_requires "vfs"  "esp_timer")
 set(requires "esp_driver_cam" "esp_cam_sensor" "lwip")
+
+if(CONFIG_IDF_TARGET_ESP32P4)
+    list(APPEND priv_requires "esp_hal_cam")
+endif()
 
 if(CONFIG_IDF_TARGET_ESP32P4)
     if(CONFIG_ESP_VIDEO_ENABLE_SWAP_SHORT)
@@ -29,7 +33,7 @@ if(CONFIG_ESP_VIDEO_ENABLE_MIPI_CSI_VIDEO_DEVICE)
 endif()
 
 if(CONFIG_ESP_VIDEO_ENABLE_DVP_VIDEO_DEVICE)
-    list(APPEND srcs "src/device/esp_video_dvp_device.c")
+    list(APPEND srcs "src/device/esp_video_dvp_device.c" "src/device/esp_video_dvp_format.c")
 endif()
 
 if(CONFIG_ESP_VIDEO_ENABLE_SPI_VIDEO_DEVICE)
@@ -70,7 +74,7 @@ include(package_manager)
 cu_pkg_define_version(${CMAKE_CURRENT_LIST_DIR})
 
 if(CONFIG_ESP_VIDEO_ENABLE_ISP_PIPELINE_CONTROLLER)
-    idf_component_optional_requires(PRIVATE "esp_ipa")
+    idf_component_optional_requires(PUBLIC "esp_ipa")
 endif()
 
 if(CONFIG_IDF_TARGET_ESP32P4)
@@ -80,11 +84,7 @@ if(CONFIG_IDF_TARGET_ESP32P4)
     endif()
 
     if(CONFIG_ESP_VIDEO_ENABLE_H264_VIDEO_DEVICE)
-        idf_component_optional_requires(PRIVATE "esp_h264")
-    endif()
-
-    if(CONFIG_ESP_VIDEO_ENABLE_SWAP_SHORT_PERF_LOG)
-        idf_component_optional_requires(PRIVATE "esp_timer")
+        idf_component_optional_requires(PRIVATE "esp_h264" "espressif__esp_h264")
     endif()
 
     if(CONFIG_ESP_VIDEO_ENABLE_BITSCRAMBLER)

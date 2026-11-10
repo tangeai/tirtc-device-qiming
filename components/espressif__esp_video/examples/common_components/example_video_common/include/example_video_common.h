@@ -196,6 +196,14 @@ typedef void *example_encoder_handle_t;
 typedef void *example_storage_handle_t;
 
 /**
+ * @brief Example video event target
+ */
+typedef enum example_video_event_target {
+    EXAMPLE_VIDEO_EVENT_TARGET_MIPI_CSI = 0,
+    EXAMPLE_VIDEO_EVENT_TARGET_MAX,
+} example_video_event_target_t;
+
+/**
  * @brief Example encoder configuration
  */
 typedef struct example_encoder_config {
@@ -401,6 +409,27 @@ esp_err_t example_msc_storage_in_use_by_usb_host(example_storage_handle_t handle
  * @note: This function is not thread-safe.
  */
 esp_err_t example_storage_get_capacity(example_storage_handle_t handle, uint64_t *capacity);
+
+#if CONFIG_EXAMPLE_ENABLE_MIPI_CSI_EVENT && ESP_VIDEO_CSI_DRIVER_HAS_EVENT && EXAMPLE_ENABLE_MIPI_CSI_CAM_SENSOR
+/**
+ * @brief Initialize the video event task
+ *
+ * @param target: the target of the video event
+ * @param fd: the file descriptor of the video device
+ *
+ * @return ESP_OK on success, otherwise an error code
+ */
+esp_err_t example_video_event_init(example_video_event_target_t target, int fd);
+
+/**
+ * @brief Deinitialize the video event task
+ *
+ * @param target: the target of the video event
+ *
+ * @return ESP_OK on success, otherwise an error code
+ */
+esp_err_t example_video_event_deinit(example_video_event_target_t target);
+#endif /* CONFIG_EXAMPLE_ENABLE_MIPI_CSI_EVENT && ESP_VIDEO_CSI_DRIVER_HAS_EVENT && EXAMPLE_ENABLE_MIPI_CSI_CAM_SENSOR */
 
 #ifdef __cplusplus
 }

@@ -38,14 +38,24 @@ static const char *TAG = "call_video";
 #define CALL_VIDEO_H264_CONSTRAINT_SET1_FLAG 0x40U
 #define CALL_VIDEO_FRAME_PIXELS           (CALL_VIDEO_RENDER_WIDTH * CALL_VIDEO_RENDER_HEIGHT)
 #define CALL_VIDEO_FRAME_BYTES            (CALL_VIDEO_FRAME_PIXELS * sizeof(uint16_t))
+#define CALL_VIDEO_MJPEG_FRAME_PIXELS     \
+    (CALL_VIDEO_MJPEG_RENDER_WIDTH * CALL_VIDEO_MJPEG_RENDER_HEIGHT)
+#define CALL_VIDEO_MJPEG_FRAME_BYTES      (CALL_VIDEO_MJPEG_FRAME_PIXELS * sizeof(uint16_t))
+#define CALL_VIDEO_RGB_POOL_BYTES         \
+    (CALL_VIDEO_MJPEG_OUTPUT_SLOT_COUNT * CALL_VIDEO_MJPEG_FRAME_BYTES + \
+     (CALL_VIDEO_OUTPUT_SLOT_COUNT - CALL_VIDEO_MJPEG_OUTPUT_SLOT_COUNT) * CALL_VIDEO_FRAME_BYTES)
 #define CALL_VIDEO_MJPEG_DIMENSION_ALIGNMENT 16U
-#define CALL_VIDEO_MJPEG_MAX_EDGE          640U
-#define CALL_VIDEO_MJPEG_MAX_PIXELS        (640U * 480U)
+#define CALL_VIDEO_MJPEG_MAX_EDGE          HARDWARE_BOARD_LCD_WIDTH
+#define CALL_VIDEO_MJPEG_MAX_PIXELS        \
+    (((HARDWARE_BOARD_LCD_WIDTH + CALL_VIDEO_MJPEG_DIMENSION_ALIGNMENT - 1U) & \
+      ~(CALL_VIDEO_MJPEG_DIMENSION_ALIGNMENT - 1U)) * \
+     ((HARDWARE_BOARD_LCD_HEIGHT + CALL_VIDEO_MJPEG_DIMENSION_ALIGNMENT - 1U) & \
+      ~(CALL_VIDEO_MJPEG_DIMENSION_ALIGNMENT - 1U)))
 #define CALL_VIDEO_MJPEG_DECODE_BYTES      \
     (CALL_VIDEO_MJPEG_MAX_PIXELS * sizeof(uint16_t))
 #define CALL_VIDEO_MJPEG_PPA_STAGING_BYTES \
-    (CALL_VIDEO_FRAME_PIXELS * 3U / 2U)
-#define CALL_VIDEO_MJPEG_FIT_MODE           VIDEO_FRAME_FIT_COVER
+    (CALL_VIDEO_MJPEG_FRAME_PIXELS * 3U / 2U)
+#define CALL_VIDEO_MJPEG_FIT_MODE           VIDEO_FRAME_FIT_CONTAIN
 #define CALL_VIDEO_MJPEG_PREVENT_UPSCALE    false
 #define CALL_VIDEO_MJPEG_STARTUP_SAMPLE_US  (1LL * 1000LL * 1000LL)
 #define CALL_VIDEO_MJPEG_GEOMETRY_LOG_LIMIT 4U
@@ -57,7 +67,7 @@ static const char *TAG = "call_video";
 #define CALL_VIDEO_PSRAM_POOL_BYTES        \
     ((CALL_VIDEO_INPUT_SLOT_COUNT * CALL_VIDEO_INPUT_SLOT_CAPACITY) + \
      (CALL_VIDEO_DECODED_SLOT_COUNT * CALL_VIDEO_DECODED_SLOT_CAPACITY) + \
-     (CALL_VIDEO_OUTPUT_SLOT_COUNT * CALL_VIDEO_FRAME_BYTES) + \
+     CALL_VIDEO_RGB_POOL_BYTES + \
      CALL_VIDEO_MJPEG_DECODE_BYTES + CALL_VIDEO_MJPEG_PPA_STAGING_BYTES)
 
 _Static_assert(CALL_VIDEO_SOURCE_CROP_X + CALL_VIDEO_SOURCE_CROP_WIDTH <=
@@ -66,11 +76,13 @@ _Static_assert(CALL_VIDEO_SOURCE_CROP_X + CALL_VIDEO_SOURCE_CROP_WIDTH <=
 _Static_assert(CALL_VIDEO_SOURCE_CROP_Y + CALL_VIDEO_SOURCE_CROP_HEIGHT <=
                    CALL_VIDEO_DECODE_MAX_HEIGHT,
                "landscape downlink crop must fit the decoder height");
-/* Qiming uses a 4:3 viewport while the shared low-latency H264 call profile is
- * 3:2. The converter preserves aspect ratio and letterboxes the remainder. */
-_Static_assert((CALL_VIDEO_RENDER_WIDTH % 16U) == 0U &&
-                   (CALL_VIDEO_RENDER_HEIGHT % 16U) == 0U,
-               "hardware JPEG output dimensions must be aligned to 16 pixels");
+/* H264 is letterboxed by the converter when its 3:2 source differs from the
+ * panel. JPEG MCU alignment belongs to its decode buffer, not the PPA viewport. */
+_Static_assert(CALL_VIDEO_RENDER_WIDTH > 0U && CALL_VIDEO_RENDER_HEIGHT > 0U &&
+                   ((CALL_VIDEO_RENDER_WIDTH | CALL_VIDEO_RENDER_HEIGHT |
+                     CALL_VIDEO_SOURCE_CROP_X | CALL_VIDEO_SOURCE_CROP_Y |
+                     CALL_VIDEO_SOURCE_CROP_WIDTH | CALL_VIDEO_SOURCE_CROP_HEIGHT) & 1U) == 0U,
+               "YUV420 conversion geometry must use positive, even dimensions");
 _Static_assert(CALL_VIDEO_ADAPTIVE_PLAYOUT_DEPTH < CALL_VIDEO_OUTPUT_SLOT_COUNT,
                "adaptive playout must leave one RGB slot retained by the LCD");
 _Static_assert(CALL_VIDEO_ADAPTIVE_PLAYOUT_MAX_DEPTH >=
@@ -103,6 +115,9 @@ _Static_assert(CALL_VIDEO_H264_HELPER_TASK_PRIORITY <
 
 _Static_assert(CALL_VIDEO_INGRESS_TASK_PRIORITY < CALL_VIDEO_TASK_PRIORITY,
                "compressed ingress relay must not preempt the RTC callback");
+_Static_assert(APP_TASK_PRIORITY_MJPEG > APP_TASK_PRIORITY_UI &&
+               APP_TASK_PRIORITY_MJPEG < APP_TASK_PRIORITY_AUDIO_PLAYBACK,
+               "hardware JPEG completion must outrank display without delaying audio");
 
 #if CONFIG_CACHE_L2_CACHE_LINE_SIZE > CONFIG_CACHE_L1_CACHE_LINE_SIZE
 #define CALL_VIDEO_CACHE_LINE_SIZE CONFIG_CACHE_L2_CACHE_LINE_SIZE
@@ -112,8 +127,15 @@ _Static_assert(CALL_VIDEO_INGRESS_TASK_PRIORITY < CALL_VIDEO_TASK_PRIORITY,
 
 _Static_assert((CALL_VIDEO_MJPEG_DECODE_BYTES % CALL_VIDEO_CACHE_LINE_SIZE) == 0U,
                "MJPEG decode buffer must be cache-line aligned");
+_Static_assert((CALL_VIDEO_FRAME_BYTES % CALL_VIDEO_CACHE_LINE_SIZE) == 0U,
+               "PPA output buffer must be cache-line aligned");
 _Static_assert(CALL_VIDEO_MJPEG_MAX_PIXELS >= CALL_VIDEO_FRAME_PIXELS,
                "MJPEG decoder pool must cover the display viewport");
+_Static_assert(CALL_VIDEO_MJPEG_OUTPUT_SLOT_COUNT >= 3U &&
+                   CALL_VIDEO_MJPEG_OUTPUT_SLOT_COUNT <= CALL_VIDEO_OUTPUT_SLOT_COUNT &&
+                   CALL_VIDEO_MJPEG_FRAME_BYTES >= CALL_VIDEO_FRAME_BYTES &&
+                   CALL_VIDEO_MJPEG_FRAME_BYTES % CALL_VIDEO_CACHE_LINE_SIZE == 0U,
+               "JPEG native-size slots must cover writer, ready and LCD owners");
 
 typedef struct {
     uint8_t *data;
@@ -138,7 +160,6 @@ typedef struct {
     uint8_t profile_idc;
     uint8_t constraint_flags;
     uint8_t level_idc;
-    uint8_t first_nal_type;
     uint32_t sps_hash;
     uint32_t pps_hash;
 } call_video_h264_access_unit_t;
@@ -163,6 +184,8 @@ typedef enum {
 
 typedef struct {
     uint16_t *pixels;
+    uint16_t width;
+    uint16_t height;
     call_video_output_state_t state;
     uint32_t sequence;
     uint32_t pts;
@@ -199,10 +222,6 @@ typedef struct {
     uint32_t adaptive_playout_generation;
     uint32_t adaptive_playout_generation_seen;
     uint8_t adaptive_playout_depth;
-    uint8_t playout_fps;
-    uint8_t mjpeg_rate_samples;
-    uint32_t mjpeg_source_interval_us;
-    bool mjpeg_rate_locked;
     uint8_t adaptive_gap_samples;
     int64_t adaptive_gap_confirm_until_us;
     int64_t adaptive_playout_activated_at_us;
@@ -264,12 +283,6 @@ typedef struct {
     uint32_t receive_gap_window_max_us;
     int64_t last_presented_at_us;
     uint32_t present_gap_window_max_us;
-    uint32_t receive_gap_max_us;
-    uint32_t present_gap_max_us;
-    uint32_t receive_gap_250ms;
-    uint32_t present_gap_250ms;
-    uint32_t receive_gap_1s;
-    uint32_t present_gap_1s;
     uint32_t decode_process_calls;
     uint64_t decode_time_us;
     uint32_t decode_access_units;
@@ -304,15 +317,12 @@ typedef struct {
     bool resources_ready;
     bool mjpeg_decoder_preparing;
     call_video_codec_t codec;
-    call_video_orientation_policy_t mjpeg_orientation;
 } call_video_renderer_t;
 
 static call_video_renderer_t s_renderer = {
     .lock = portMUX_INITIALIZER_UNLOCKED,
     .presented_output_slot = CALL_VIDEO_OUTPUT_SLOT_INVALID,
     .codec = CALL_VIDEO_CODEC_H264,
-    .playout_fps = APP_MEDIA_CALL_VIDEO_FPS,
-    .mjpeg_orientation = CALL_VIDEO_ORIENTATION_KEEP,
 };
 
 static uint32_t call_video_elapsed_us(int64_t started_at_us, int64_t finished_at_us)
@@ -366,114 +376,28 @@ static bool call_video_adaptive_playout_is_active(int64_t now_us)
     int64_t adaptive_until_us = 0;
 
     taskENTER_CRITICAL(&s_renderer.lock);
-    adaptive_until_us = s_renderer.adaptive_playout_until_us;
+    if (s_renderer.codec == CALL_VIDEO_CODEC_H264) {
+        adaptive_until_us = s_renderer.adaptive_playout_until_us;
+    }
     taskEXIT_CRITICAL(&s_renderer.lock);
     return adaptive_until_us > now_us;
 }
 
-static uint32_t call_video_frame_interval_us(uint32_t fps)
-{
-    if (fps == 0U) {
-        fps = 1U;
-    }
-    return (1000000U + fps - 1U) / fps;
-}
-
-static uint8_t call_video_codec_playout_fps(call_video_codec_t codec)
-{
-    return codec == CALL_VIDEO_CODEC_MJPEG ?
-               (uint8_t)APP_MEDIA_WECHAT_VIDEO_FPS :
-               (uint8_t)APP_MEDIA_CALL_VIDEO_FPS;
-}
-
 static uint32_t call_video_adaptive_playout_interval(uint8_t ready_frames,
-                                                     uint8_t target_depth,
-                                                     uint8_t playout_fps)
+                                                     uint8_t target_depth)
 {
     if (target_depth >= 4U && (uint32_t)ready_frames * 4U <= target_depth) {
-        uint32_t critical_fps =
-            playout_fps > CALL_VIDEO_ADAPTIVE_CRITICAL_FPS_DELTA ?
-                playout_fps - CALL_VIDEO_ADAPTIVE_CRITICAL_FPS_DELTA : 1U;
-        return call_video_frame_interval_us(critical_fps);
+        return CALL_VIDEO_ADAPTIVE_CRITICAL_INTERVAL_US;
     }
     if (target_depth >= 2U && (uint32_t)ready_frames * 2U <= target_depth) {
-        uint32_t refill_fps =
-            playout_fps > CALL_VIDEO_ADAPTIVE_REFILL_FPS_DELTA ?
-                playout_fps - CALL_VIDEO_ADAPTIVE_REFILL_FPS_DELTA : 1U;
-        return call_video_frame_interval_us(refill_fps);
+        return CALL_VIDEO_ADAPTIVE_REFILL_INTERVAL_US;
     }
-    return call_video_frame_interval_us(playout_fps);
+    return CALL_VIDEO_ADAPTIVE_PLAYOUT_INTERVAL_US;
 }
 
 static bool call_video_pts_is_newer(uint32_t current, uint32_t previous)
 {
     return (int32_t)(current - previous) > 0;
-}
-
-/* Caller holds s_renderer.lock. WeChat advertises a maximum frame rate, while
- * the selected source commonly runs below that ceiling. Pace recovery frames
- * from measured PTS when it is in milliseconds, with sane wall-cadence as a
- * fallback. Very short recovery-burst gaps and long outages are deliberately
- * excluded so they cannot bias the source-rate estimate. */
-static bool call_video_update_mjpeg_playout_rate_locked(uint32_t pts,
-                                                        uint32_t wall_gap_us,
-                                                        uint8_t *updated_fps,
-                                                        uint32_t *interval_us)
-{
-    if (s_renderer.codec != CALL_VIDEO_CODEC_MJPEG ||
-        s_renderer.mjpeg_rate_locked ||
-        updated_fps == NULL || interval_us == NULL) {
-        return false;
-    }
-
-    uint32_t sample_us = 0U;
-    if (s_renderer.received_pts_valid &&
-        call_video_pts_is_newer(pts, s_renderer.received_pts)) {
-        uint32_t pts_step = pts - s_renderer.received_pts;
-        if (pts_step <= UINT32_MAX / 1000U) {
-            uint32_t pts_step_us = pts_step * 1000U;
-            if (pts_step_us >= CALL_VIDEO_MJPEG_RATE_MIN_INTERVAL_US &&
-                pts_step_us <= CALL_VIDEO_MJPEG_RATE_MAX_INTERVAL_US) {
-                sample_us = pts_step_us;
-            }
-        }
-    }
-    if (sample_us == 0U &&
-        wall_gap_us >= CALL_VIDEO_MJPEG_RATE_MIN_INTERVAL_US &&
-        wall_gap_us <= CALL_VIDEO_MJPEG_RATE_MAX_INTERVAL_US) {
-        sample_us = wall_gap_us;
-    }
-    if (sample_us == 0U) {
-        return false;
-    }
-
-    if (s_renderer.mjpeg_rate_samples == 0U) {
-        s_renderer.mjpeg_source_interval_us = sample_us;
-    } else {
-        s_renderer.mjpeg_source_interval_us =
-            (s_renderer.mjpeg_source_interval_us * 3U + sample_us + 2U) / 4U;
-    }
-    if (s_renderer.mjpeg_rate_samples < UINT8_MAX) {
-        s_renderer.mjpeg_rate_samples++;
-    }
-    if (s_renderer.mjpeg_rate_samples < CALL_VIDEO_MJPEG_RATE_MIN_SAMPLES) {
-        return false;
-    }
-
-    uint32_t measured_fps =
-        (1000000U + s_renderer.mjpeg_source_interval_us / 2U) /
-        s_renderer.mjpeg_source_interval_us;
-    if (measured_fps < CALL_VIDEO_MJPEG_MIN_PLAYOUT_FPS) {
-        measured_fps = CALL_VIDEO_MJPEG_MIN_PLAYOUT_FPS;
-    }
-    if (measured_fps > CALL_VIDEO_MJPEG_MAX_PLAYOUT_FPS) {
-        measured_fps = CALL_VIDEO_MJPEG_MAX_PLAYOUT_FPS;
-    }
-    s_renderer.playout_fps = (uint8_t)measured_fps;
-    s_renderer.mjpeg_rate_locked = true;
-    *updated_fps = s_renderer.playout_fps;
-    *interval_us = s_renderer.mjpeg_source_interval_us;
-    return true;
 }
 
 static void call_video_note_received(int64_t received_at_us, uint32_t pts)
@@ -482,48 +406,33 @@ static void call_video_note_received(int64_t received_at_us, uint32_t pts)
     bool adaptive_target_raised = false;
     bool adaptive_gap_confirmed = false;
     uint32_t adaptive_gap_us = 0U;
-    uint32_t playout_interval_us =
-        call_video_frame_interval_us(APP_MEDIA_CALL_VIDEO_FPS);
     uint8_t adaptive_depth = CALL_VIDEO_ADAPTIVE_PLAYOUT_DEPTH;
-    bool ordered_playout_required = false;
-    bool mjpeg_rate_changed = false;
-    uint8_t measured_playout_fps = 0U;
-    uint32_t measured_interval_us = 0U;
-    uint32_t receive_gap_us = 0U;
+    uint32_t mjpeg_gap_us = 0U;
+    static int64_t last_mjpeg_gap_log_at_us;
 
     taskENTER_CRITICAL(&s_renderer.lock);
     if (s_renderer.last_received_at_us > 0 &&
         received_at_us > s_renderer.last_received_at_us) {
-        receive_gap_us = call_video_elapsed_us(s_renderer.last_received_at_us,
-                                               received_at_us);
-        if (receive_gap_us > s_renderer.receive_gap_window_max_us) {
-            s_renderer.receive_gap_window_max_us = receive_gap_us;
+        uint32_t gap_us = call_video_elapsed_us(s_renderer.last_received_at_us,
+                                                received_at_us);
+        if (gap_us > s_renderer.receive_gap_window_max_us) {
+            s_renderer.receive_gap_window_max_us = gap_us;
         }
-        if (receive_gap_us > s_renderer.receive_gap_max_us) {
-            s_renderer.receive_gap_max_us = receive_gap_us;
+        if (s_renderer.codec == CALL_VIDEO_CODEC_MJPEG &&
+            gap_us >= CALL_VIDEO_ADAPTIVE_PLAYOUT_GAP_US &&
+            received_at_us - last_mjpeg_gap_log_at_us >= 1000000LL) {
+            mjpeg_gap_us = gap_us;
+            last_mjpeg_gap_log_at_us = received_at_us;
         }
-        s_renderer.receive_gap_250ms += receive_gap_us >= 250000U;
-        s_renderer.receive_gap_1s += receive_gap_us >= 1000000U;
-    }
-    mjpeg_rate_changed = call_video_update_mjpeg_playout_rate_locked(
-        pts,
-        receive_gap_us,
-        &measured_playout_fps,
-        &measured_interval_us);
-    playout_interval_us = call_video_frame_interval_us(s_renderer.playout_fps);
-    ordered_playout_required = s_renderer.codec == CALL_VIDEO_CODEC_H264 ||
-                               s_renderer.codec == CALL_VIDEO_CODEC_MJPEG;
-    if (receive_gap_us > 0U) {
-        if (ordered_playout_required &&
-            receive_gap_us >=
-            playout_interval_us * CALL_VIDEO_ADAPTIVE_PLAYOUT_GAP_FRAMES) {
-            adaptive_gap_us = receive_gap_us;
+        /* Only dependent H264 access units use the ordered recovery reservoir.
+         * Independent JPEG pictures must keep the bounded latest-frame path. */
+        if (s_renderer.codec == CALL_VIDEO_CODEC_H264 &&
+            gap_us >= CALL_VIDEO_ADAPTIVE_PLAYOUT_GAP_US) {
+            adaptive_gap_us = gap_us;
             const bool adaptive_already_active =
                 s_renderer.adaptive_playout_until_us > received_at_us;
             if (adaptive_already_active ||
-                receive_gap_us >=
-                    playout_interval_us *
-                        CALL_VIDEO_ADAPTIVE_IMMEDIATE_GAP_FRAMES) {
+                gap_us >= CALL_VIDEO_ADAPTIVE_IMMEDIATE_GAP_US) {
                 adaptive_gap_confirmed = true;
             } else {
                 if (received_at_us <= s_renderer.adaptive_gap_confirm_until_us) {
@@ -542,8 +451,8 @@ static void call_video_note_received(int64_t received_at_us, uint32_t pts)
 
             if (adaptive_gap_confirmed) {
                 uint32_t required_depth =
-                    (receive_gap_us + playout_interval_us - 1U) /
-                    playout_interval_us + 1U;
+                    (gap_us + CALL_VIDEO_ADAPTIVE_PLAYOUT_INTERVAL_US - 1U) /
+                    CALL_VIDEO_ADAPTIVE_PLAYOUT_INTERVAL_US + 1U;
                 if (required_depth < CALL_VIDEO_ADAPTIVE_PLAYOUT_DEPTH) {
                     required_depth = CALL_VIDEO_ADAPTIVE_PLAYOUT_DEPTH;
                 }
@@ -585,19 +494,16 @@ static void call_video_note_received(int64_t received_at_us, uint32_t pts)
     }
     taskEXIT_CRITICAL(&s_renderer.lock);
 
-    if (mjpeg_rate_changed) {
-        ESP_LOGI(TAG,
-                 "MJPEG source cadence locked: interval=%lums playout=%ufps samples=%u",
-                 (unsigned long)(measured_interval_us / 1000U),
-                 (unsigned)measured_playout_fps,
-                 (unsigned)CALL_VIDEO_MJPEG_RATE_MIN_SAMPLES);
+    if (mjpeg_gap_us > 0U) {
+        ESP_LOGW(TAG, "MJPEG receive gap=%lums; presentation=latest",
+                 (unsigned long)(mjpeg_gap_us / 1000U));
     }
     if (adaptive_playout_activated) {
         ESP_LOGI(TAG,
                  "adaptive video playout active: input_gap=%lums depth=%u pace=%lums hold=%lus",
                  (unsigned long)(adaptive_gap_us / 1000U),
                  (unsigned)adaptive_depth,
-                 (unsigned long)(playout_interval_us / 1000U),
+                 (unsigned long)(CALL_VIDEO_ADAPTIVE_PLAYOUT_INTERVAL_US / 1000U),
                  (unsigned long)(CALL_VIDEO_ADAPTIVE_PLAYOUT_HOLD_US / 1000000LL));
     } else if (adaptive_target_raised) {
         ESP_LOGI(TAG,
@@ -615,51 +521,6 @@ static const char *call_video_codec_name(call_video_codec_t codec)
     case CALL_VIDEO_CODEC_H264:
     default:
         return "h264";
-    }
-}
-
-static bool call_video_orientation_is_valid(
-    call_video_orientation_policy_t orientation)
-{
-    return orientation == CALL_VIDEO_ORIENTATION_KEEP ||
-           orientation == CALL_VIDEO_ORIENTATION_NORMALIZE_LANDSCAPE;
-}
-
-static const char *call_video_orientation_name(
-    call_video_orientation_policy_t orientation)
-{
-    return orientation == CALL_VIDEO_ORIENTATION_NORMALIZE_LANDSCAPE ?
-               "normalize-landscape" :
-               "keep";
-}
-
-static video_frame_rotation_t call_video_resolve_mjpeg_rotation(
-    call_video_orientation_policy_t orientation,
-    uint32_t source_width,
-    uint32_t source_height)
-{
-    return orientation == CALL_VIDEO_ORIENTATION_NORMALIZE_LANDSCAPE &&
-                   source_height > source_width ?
-               VIDEO_FRAME_ROTATION_CLOCKWISE_90 :
-               VIDEO_FRAME_ROTATION_CLOCKWISE_0;
-}
-
-static void call_video_mjpeg_get_oriented_dimensions(
-    uint32_t source_width,
-    uint32_t source_height,
-    video_frame_rotation_t display_rotation,
-    uint32_t *oriented_width,
-    uint32_t *oriented_height)
-{
-    bool swaps_axes =
-        display_rotation == VIDEO_FRAME_ROTATION_CLOCKWISE_90 ||
-        display_rotation == VIDEO_FRAME_ROTATION_CLOCKWISE_270;
-
-    if (oriented_width != NULL) {
-        *oriented_width = swaps_axes ? source_height : source_width;
-    }
-    if (oriented_height != NULL) {
-        *oriented_height = swaps_axes ? source_width : source_height;
     }
 }
 
@@ -752,9 +613,6 @@ static call_video_h264_access_unit_t call_video_h264_inspect_access_unit(
         if (nal_end > nal_offset) {
             uint8_t nal_type = data[nal_offset] & 0x1FU;
             size_t nal_len = nal_end - nal_offset;
-            if (!info.has_nal) {
-                info.first_nal_type = nal_type;
-            }
             info.has_nal = true;
             if (nal_type == 7U) {
                 info.has_sps = true;
@@ -938,6 +796,38 @@ static esp_err_t call_video_prepare_h264_access_unit(const uint8_t *data,
     taskEXIT_CRITICAL(&s_renderer.lock);
     return ESP_OK;
 }
+
+#if CONFIG_APP_MEDIA_PERIODIC_DIAGNOSTICS
+static void call_video_log_small_rejected_au(const uint8_t *data, size_t data_len)
+{
+    if (data == NULL || data_len == 0U || data_len > 128U) {
+        return;
+    }
+
+    for (size_t offset = 0U; offset < data_len; offset += 16U) {
+        const size_t chunk_len = data_len - offset < 16U ? data_len - offset : 16U;
+        char line[(16U * 3U) + 1U] = {0};
+        size_t written = 0U;
+
+        for (size_t index = 0U; index < chunk_len; ++index) {
+            int ret = snprintf(line + written,
+                               sizeof(line) - written,
+                               "%02X%s",
+                               data[offset + index],
+                               index + 1U == chunk_len ? "" : " ");
+            if (ret <= 0 || (size_t)ret >= sizeof(line) - written) {
+                break;
+            }
+            written += (size_t)ret;
+        }
+        ESP_LOGW(TAG,
+                 "H264 rejected AU bytes: offset=%u/%u data=%s",
+                 (unsigned)offset,
+                 (unsigned)data_len,
+                 line);
+    }
+}
+#endif
 
 static uint32_t call_video_input_queue_depth(void);
 
@@ -1617,8 +1507,7 @@ static void call_video_log_stats_if_due(call_video_log_window_t *window,
                                    (uint32_t)uxQueueMessagesWaiting(s_renderer.decoded_ready_slots) : 0U;
     uint32_t output_queue_depth = 0U;
     uint32_t adaptive_target_depth = 0U;
-    uint32_t adaptive_interval_us =
-        call_video_frame_interval_us(APP_MEDIA_CALL_VIDEO_FPS);
+    uint32_t adaptive_interval_us = CALL_VIDEO_ADAPTIVE_PLAYOUT_INTERVAL_US;
     bool adaptive_playout_active =
         call_video_adaptive_playout_is_active(esp_timer_get_time());
     if (s_renderer.frame_mutex != NULL &&
@@ -1955,10 +1844,9 @@ static esp_err_t call_video_decode_slot(esp_h264_dec_handle_t decoder,
             const uint32_t au_hash =
                 call_video_h264_hash_nal(slot->data, slot->data_len);
             const size_t tail = slot->data_len >= 4U ? slot->data_len - 4U : 0U;
-            const size_t dump_len = slot->data_len < 64U ? slot->data_len : 64U;
             ESP_LOGW(TAG,
                      "H264 AU rejected: decoder=%d consume=%u remaining=%u "
-                     "pts=%lu key=%d len=%u hash=%08lx nal=%u "
+                     "pts=%lu key=%d len=%u hash=%08lx "
                      "annexb=%d sps=%d pps=%d idr=%d "
                      "head=%02X%02X%02X%02X tail=%02X%02X%02X%02X",
                      (int)decode_ret,
@@ -1968,7 +1856,6 @@ static esp_err_t call_video_decode_slot(esp_h264_dec_handle_t decoder,
                      slot->key_frame ? 1 : 0,
                      (unsigned)slot->data_len,
                      (unsigned long)au_hash,
-                     (unsigned)au.first_nal_type,
                      au.annexb ? 1 : 0,
                      au.has_sps ? 1 : 0,
                      au.has_pps ? 1 : 0,
@@ -1981,10 +1868,9 @@ static esp_err_t call_video_decode_slot(esp_h264_dec_handle_t decoder,
                      slot->data_len > tail + 1U ? slot->data[tail + 1U] : 0U,
                      slot->data_len > tail + 2U ? slot->data[tail + 2U] : 0U,
                      slot->data_len > tail + 3U ? slot->data[tail + 3U] : 0U);
-            ESP_LOG_BUFFER_HEX_LEVEL("H264_RX_REJECT",
-                                     slot->data,
-                                     dump_len,
-                                     ESP_LOG_WARN);
+#if CONFIG_APP_MEDIA_PERIODIC_DIAGNOSTICS
+            call_video_log_small_rejected_au(slot->data, slot->data_len);
+#endif
             return ESP_FAIL;
         }
         input.raw_data.buffer += input.consume;
@@ -2022,7 +1908,9 @@ static esp_err_t call_video_output_begin_write(uint8_t *slot_index, uint16_t **p
     }
 
     uint8_t selected = CALL_VIDEO_OUTPUT_SLOT_INVALID;
-    for (uint8_t index = 0; index < CALL_VIDEO_OUTPUT_SLOT_COUNT; ++index) {
+    const uint8_t output_count = s_renderer.codec == CALL_VIDEO_CODEC_MJPEG ?
+        CALL_VIDEO_MJPEG_OUTPUT_SLOT_COUNT : CALL_VIDEO_OUTPUT_SLOT_COUNT;
+    for (uint8_t index = 0; index < output_count; ++index) {
         if (s_renderer.output_slots[index].state == CALL_VIDEO_OUTPUT_FREE) {
             selected = index;
             break;
@@ -2043,6 +1931,10 @@ static esp_err_t call_video_output_begin_write(uint8_t *slot_index, uint16_t **p
     }
 
     s_renderer.output_slots[selected].state = CALL_VIDEO_OUTPUT_WRITING;
+    s_renderer.output_slots[selected].width = s_renderer.codec == CALL_VIDEO_CODEC_MJPEG ?
+        CALL_VIDEO_MJPEG_RENDER_WIDTH : CALL_VIDEO_RENDER_WIDTH;
+    s_renderer.output_slots[selected].height = s_renderer.codec == CALL_VIDEO_CODEC_MJPEG ?
+        CALL_VIDEO_MJPEG_RENDER_HEIGHT : CALL_VIDEO_RENDER_HEIGHT;
     s_renderer.output_slots[selected].pts = 0;
     memset(&s_renderer.output_slots[selected].trace,
            0,
@@ -2250,7 +2142,7 @@ static void call_video_renderer_task(void *arg)
         .source_crop_height = CALL_VIDEO_SOURCE_CROP_HEIGHT,
         .fit_mode = VIDEO_FRAME_FIT_CONTAIN,
         .prevent_upscale = false,
-        .output_rgb565_byte_swap = false,
+        .output_rgb565_byte_swap = HARDWARE_BOARD_VIDEO_RGB565_BYTE_SWAP,
     };
 
     /* Reserve the decoder's internal state before the call profile releases
@@ -2719,8 +2611,6 @@ static void call_video_mjpeg_renderer_task(void *arg)
     jpeg_decoder_handle_t decoder = NULL;
     video_frame_converter_handle_t converter = NULL;
     uint8_t *decode_buffer = NULL;
-    call_video_orientation_policy_t orientation =
-        CALL_VIDEO_ORIENTATION_KEEP;
     call_video_mjpeg_log_window_t log_window = {0};
     int64_t last_decode_warning_us = 0;
     int64_t last_geometry_log_us = 0;
@@ -2743,9 +2633,8 @@ static void call_video_mjpeg_renderer_task(void *arg)
     uint16_t last_offset_y = 0U;
     const jpeg_decode_cfg_t decode_config = {
         .output_format = JPEG_DECODE_OUT_FORMAT_RGB565,
-        /* The JPEG decoder emits packed RGB565. The converter normalizes its
-         * input and writes native little-endian RGB565 for the Qiming DSI
-         * frame buffer. */
+        /* Keep the decoder's panel-order big-endian RGB565. The converter
+         * normalizes it at PPA input and restores panel order at output. */
         .rgb_order = JPEG_DEC_RGB_ELEMENT_ORDER_RGB,
         .conv_std = JPEG_YUV_RGB_CONV_STD_BT601,
     };
@@ -2754,7 +2643,6 @@ static void call_video_mjpeg_renderer_task(void *arg)
     decoder = s_renderer.mjpeg_decoder;
     converter = s_renderer.mjpeg_converter;
     decode_buffer = s_renderer.mjpeg_decode_buffer;
-    orientation = s_renderer.mjpeg_orientation;
     taskEXIT_CRITICAL(&s_renderer.lock);
     esp_err_t startup_ret =
         decoder != NULL && converter != NULL && decode_buffer != NULL ?
@@ -2775,24 +2663,22 @@ static void call_video_mjpeg_renderer_task(void *arg)
 
     ESP_LOGI(TAG,
              "MJPEG downlink renderer ready: decoder=hardware-jpeg-rgb565 "
-             "orientation=%s source_rotation=not-signaled "
+             "rotation=cw0 source_rotation=not-signaled "
              "scale=%s fit=%s upscale=%s output=RGB565-%ux%u "
              "source_cap=%upx/%u-edge "
-             "input_slots=%u input_cap=%u presentation=latest-%u playout=%ufps core=%d",
-             call_video_orientation_name(orientation),
+             "input_slots=%u input_cap=%u presentation=latest-%u core=%d",
              video_frame_converter_mode_name(
                  video_frame_converter_get_mode(converter)),
              video_frame_fit_mode_name(CALL_VIDEO_MJPEG_FIT_MODE),
              CALL_VIDEO_MJPEG_PREVENT_UPSCALE ? "deny" : "allow",
-             CALL_VIDEO_RENDER_WIDTH,
-             CALL_VIDEO_RENDER_HEIGHT,
+             CALL_VIDEO_MJPEG_RENDER_WIDTH,
+             CALL_VIDEO_MJPEG_RENDER_HEIGHT,
              CALL_VIDEO_MJPEG_MAX_PIXELS,
              CALL_VIDEO_MJPEG_MAX_EDGE,
              CALL_VIDEO_INPUT_SLOT_COUNT,
              CALL_VIDEO_INPUT_SLOT_CAPACITY,
-             CALL_VIDEO_OUTPUT_SLOT_COUNT,
-             (unsigned)call_video_codec_playout_fps(CALL_VIDEO_CODEC_MJPEG),
-             APP_TASK_CORE_VIDEO_MJPEG);
+             CALL_VIDEO_MJPEG_OUTPUT_SLOT_COUNT,
+             APP_TASK_CORE_VIDEO_DECODE);
 
     while (!call_video_stop_requested()) {
         uint8_t index = 0;
@@ -2804,17 +2690,15 @@ static void call_video_mjpeg_renderer_task(void *arg)
             continue;
         }
 
-        /* Normal MJPEG uses the newest picture for minimum latency. A measured
-         * input outage activates the bounded ordered reservoir, turning the
-         * recovery burst into paced inventory instead of another visible jump. */
+        /* MJPEG frames are independently decodable. Decode the newest queued
+         * frame and release stale compressed frames instead of building
+         * latency when the network arrives in a burst. */
         uint32_t stale_frames = 0U;
         uint8_t newer_index = 0U;
-        if (!call_video_adaptive_playout_is_active(esp_timer_get_time())) {
-            while (xQueueReceive(s_renderer.ready_slots, &newer_index, 0) == pdTRUE) {
-                call_video_return_slot(index);
-                index = newer_index;
-                stale_frames++;
-            }
+        while (xQueueReceive(s_renderer.ready_slots, &newer_index, 0) == pdTRUE) {
+            call_video_return_slot(index);
+            index = newer_index;
+            stale_frames++;
         }
         if (stale_frames > 0U) {
             taskENTER_CRITICAL(&s_renderer.lock);
@@ -2854,18 +2738,9 @@ static void call_video_mjpeg_renderer_task(void *arg)
                                                      &picture);
         uint32_t aligned_width = 0U;
         uint32_t aligned_height = 0U;
-        uint32_t oriented_width = 0U;
-        uint32_t oriented_height = 0U;
         size_t expected_output_size = 0U;
         video_frame_rotation_t display_rotation =
-            call_video_resolve_mjpeg_rotation(orientation,
-                                               picture.width,
-                                               picture.height);
-        call_video_mjpeg_get_oriented_dimensions(picture.width,
-                                                  picture.height,
-                                                  display_rotation,
-                                                  &oriented_width,
-                                                  &oriented_height);
+            VIDEO_FRAME_ROTATION_CLOCKWISE_0;
         if (decode_ret == ESP_OK) {
             if (picture.width == 0U || picture.height == 0U ||
                 picture.width > CALL_VIDEO_MJPEG_MAX_EDGE ||
@@ -2966,13 +2841,31 @@ static void call_video_mjpeg_renderer_task(void *arg)
         }
         if (output_index != CALL_VIDEO_OUTPUT_SLOT_INVALID) {
             bool publish = convert_ret == ESP_OK && generation_matches;
+            video_frame_converter_stats_t converter_stats = {0};
+            if (publish) {
+                video_frame_converter_get_stats(converter, &converter_stats);
+                s_renderer.output_slots[output_index].trace.render_x =
+                    converter_stats.last_offset_x;
+                s_renderer.output_slots[output_index].trace.render_y =
+                    converter_stats.last_offset_y;
+                s_renderer.output_slots[output_index].trace.render_width =
+                    converter_stats.last_render_width;
+                s_renderer.output_slots[output_index].trace.render_height =
+                    converter_stats.last_render_height;
+            }
             call_video_output_finish_write(output_index,
                                            publish,
                                            convert_elapsed_us,
                                            slot->pts);
             if (publish) {
-                video_frame_converter_stats_t converter_stats = {0};
-                video_frame_converter_get_stats(converter, &converter_stats);
+                taskENTER_CRITICAL(&s_renderer.lock);
+                s_renderer.convert_pack_time_us = converter_stats.pack_time_us;
+                s_renderer.convert_pack_max_us = converter_stats.pack_max_us;
+                s_renderer.convert_ppa_time_us = converter_stats.ppa_time_us;
+                s_renderer.convert_ppa_max_us = converter_stats.ppa_max_us;
+                s_renderer.convert_swap_time_us = converter_stats.swap_time_us;
+                s_renderer.convert_swap_max_us = converter_stats.swap_max_us;
+                taskEXIT_CRITICAL(&s_renderer.lock);
                 bool geometry_changed =
                     last_source_width != picture.width ||
                     last_source_height != picture.height ||
@@ -2991,19 +2884,20 @@ static void call_video_mjpeg_renderer_task(void *arg)
                 if (!first_frame_logged) {
                     first_frame_logged = true;
                     first_frame_ready_us = now_us;
-                    if (oriented_width < CALL_VIDEO_RENDER_WIDTH ||
-                        oriented_height < CALL_VIDEO_RENDER_HEIGHT) {
+#if CONFIG_APP_DISPLAY_TIMING_DIAGNOSTICS
+                    ESP_LOGI(TAG, "MJPEG first converted frame task: affinity=%ld running_core=%d",
+                             (long)xTaskGetCoreID(NULL), xPortGetCoreID());
+#endif
+                    if (picture.width < CALL_VIDEO_MJPEG_RENDER_WIDTH ||
+                        picture.height < CALL_VIDEO_MJPEG_RENDER_HEIGHT) {
                         ESP_LOGI(TAG,
                                  "MJPEG downlink source below panel: "
                                  "source=%ux%u render=%ux%u; "
-                                 "%s",
+                                 "uniform upscale active",
                                  (unsigned)picture.width,
                                  (unsigned)picture.height,
                                  (unsigned)converter_stats.last_render_width,
-                                 (unsigned)converter_stats.last_render_height,
-                                 CALL_VIDEO_MJPEG_PREVENT_UPSCALE ?
-                                     "native-size centered output active" :
-                                     "uniform full-panel upscale active");
+                                 (unsigned)converter_stats.last_render_height);
                     }
                     ESP_LOGI(TAG,
                              "MJPEG downlink first frame ready: source=%ux%u "
@@ -3025,8 +2919,8 @@ static void call_video_mjpeg_renderer_task(void *arg)
                              (unsigned)converter_stats.last_render_height,
                              (unsigned)converter_stats.last_offset_x,
                              (unsigned)converter_stats.last_offset_y,
-                             CALL_VIDEO_RENDER_WIDTH,
-                             CALL_VIDEO_RENDER_HEIGHT,
+                             CALL_VIDEO_MJPEG_RENDER_WIDTH,
+                             CALL_VIDEO_MJPEG_RENDER_HEIGHT,
                              (unsigned)compressed_size,
                              (unsigned)slot->pts,
                              (unsigned)decode_elapsed_us,
@@ -3135,7 +3029,7 @@ static void call_video_mjpeg_renderer_task(void *arg)
                 now_us - last_decode_warning_us >= 2LL * 1000LL * 1000LL) {
                 ESP_LOGW(TAG,
                          "MJPEG downlink frame rejected: stage=%s ret=%s "
-                         "compressed=%u source=%ux%u oriented=%ux%u "
+                         "compressed=%u source=%ux%u "
                          "cap=%upx/%u-edge aligned=%ux%u output=%ux%u",
                          decode_ret != ESP_OK ? "decode" : "scale",
                          esp_err_to_name(decode_ret != ESP_OK ?
@@ -3144,14 +3038,12 @@ static void call_video_mjpeg_renderer_task(void *arg)
                          (unsigned)compressed_size,
                          (unsigned)picture.width,
                          (unsigned)picture.height,
-                         (unsigned)oriented_width,
-                         (unsigned)oriented_height,
                          CALL_VIDEO_MJPEG_MAX_PIXELS,
                          CALL_VIDEO_MJPEG_MAX_EDGE,
                          (unsigned)aligned_width,
                          (unsigned)aligned_height,
-                         CALL_VIDEO_RENDER_WIDTH,
-                         CALL_VIDEO_RENDER_HEIGHT);
+                         CALL_VIDEO_MJPEG_RENDER_WIDTH,
+                         CALL_VIDEO_MJPEG_RENDER_HEIGHT);
                 last_decode_warning_us = now_us;
             }
         }
@@ -3179,7 +3071,8 @@ static esp_err_t call_video_prepare_output_pool(void)
         s_renderer.output_slots[index].pixels = app_memory_aligned_calloc_psram(
             CALL_VIDEO_CACHE_LINE_SIZE,
             1,
-            CALL_VIDEO_FRAME_BYTES,
+            index < CALL_VIDEO_MJPEG_OUTPUT_SLOT_COUNT ?
+                CALL_VIDEO_MJPEG_FRAME_BYTES : CALL_VIDEO_FRAME_BYTES,
             MALLOC_CAP_DMA | MALLOC_CAP_CACHE_ALIGNED);
         if (s_renderer.output_slots[index].pixels == NULL) {
             return ESP_ERR_NO_MEM;
@@ -3245,23 +3138,17 @@ static void call_video_reset_session_queues(bool populate)
 static esp_err_t call_video_prepare_persistent_resources(void)
 {
     const video_frame_converter_config_t mjpeg_converter_config = {
-        .output_width = CALL_VIDEO_RENDER_WIDTH,
-        .output_height = CALL_VIDEO_RENDER_HEIGHT,
-        /*
-         * The cloud may change the JPEG source size, but the display contract
-         * stays fixed at 640x480. Crop symmetrically and apply one uniform PPA
-         * scale without a second display-side resize or aspect-ratio
-         * distortion. The cloud may temporarily choose a smaller rendition;
-         * upscale it uniformly so the call surface remains full-screen while
-         * preserving the decoded aspect ratio.
-         */
+        .output_width = CALL_VIDEO_MJPEG_RENDER_WIDTH,
+        .output_height = CALL_VIDEO_MJPEG_RENDER_HEIGHT,
+        /* Preserve the entire remote scene, with one aspect-preserving scale
+         * to native panel pixels. Portrait video retains side bars. */
         .source_crop_x = 0U,
         .source_crop_y = 0U,
         .source_crop_width = 0U,
         .source_crop_height = 0U,
         .fit_mode = CALL_VIDEO_MJPEG_FIT_MODE,
         .prevent_upscale = CALL_VIDEO_MJPEG_PREVENT_UPSCALE,
-        .output_rgb565_byte_swap = false,
+        .output_rgb565_byte_swap = HARDWARE_BOARD_VIDEO_RGB565_BYTE_SWAP,
     };
 
     if (s_renderer.frame_mutex == NULL) {
@@ -3387,7 +3274,7 @@ esp_err_t call_video_renderer_prewarm(void)
                  "psram_free=%u psram_largest=%u internal_largest=%u",
                  (unsigned)(CALL_VIDEO_INPUT_SLOT_COUNT * CALL_VIDEO_INPUT_SLOT_CAPACITY),
                  (unsigned)(CALL_VIDEO_DECODED_SLOT_COUNT * CALL_VIDEO_DECODED_SLOT_CAPACITY),
-                 (unsigned)(CALL_VIDEO_OUTPUT_SLOT_COUNT * CALL_VIDEO_FRAME_BYTES),
+                 (unsigned)CALL_VIDEO_RGB_POOL_BYTES,
                  (unsigned)CALL_VIDEO_MJPEG_DECODE_BYTES,
                  (unsigned)CALL_VIDEO_MJPEG_PPA_STAGING_BYTES,
                  (unsigned)CALL_VIDEO_PSRAM_POOL_BYTES,
@@ -3398,30 +3285,13 @@ esp_err_t call_video_renderer_prewarm(void)
     return ret;
 }
 
-esp_err_t call_video_renderer_start_with_config(
-    const call_video_renderer_config_t *config)
+esp_err_t call_video_renderer_start_for_codec(call_video_codec_t codec)
 {
-    ESP_RETURN_ON_FALSE(config != NULL,
-                        ESP_ERR_INVALID_ARG,
-                        TAG,
-                        "call video renderer config is required");
-    call_video_codec_t codec = config->codec;
     ESP_RETURN_ON_FALSE(codec == CALL_VIDEO_CODEC_H264 ||
                             codec == CALL_VIDEO_CODEC_MJPEG,
                         ESP_ERR_INVALID_ARG,
                         TAG,
                         "unsupported call video codec");
-    ESP_RETURN_ON_FALSE(
-        call_video_orientation_is_valid(config->mjpeg_orientation),
-        ESP_ERR_INVALID_ARG,
-        TAG,
-        "unsupported MJPEG orientation policy");
-    ESP_RETURN_ON_FALSE(codec == CALL_VIDEO_CODEC_MJPEG ||
-                            config->mjpeg_orientation ==
-                                CALL_VIDEO_ORIENTATION_KEEP,
-                        ESP_ERR_INVALID_ARG,
-                        TAG,
-                        "H264 renderer does not accept MJPEG orientation policy");
     ESP_RETURN_ON_ERROR(call_video_renderer_prewarm(), TAG, "reserve call video pools failed");
     if (codec == CALL_VIDEO_CODEC_MJPEG) {
         ESP_RETURN_ON_ERROR(call_video_renderer_prewarm_mjpeg_decoder(),
@@ -3440,10 +3310,7 @@ esp_err_t call_video_renderer_start_with_config(
         return ESP_ERR_INVALID_STATE;
     }
     if (s_renderer.running || s_renderer.start_pending) {
-        bool same_codec =
-            s_renderer.codec == codec &&
-            (codec != CALL_VIDEO_CODEC_MJPEG ||
-             s_renderer.mjpeg_orientation == config->mjpeg_orientation);
+        bool same_codec = s_renderer.codec == codec;
         taskEXIT_CRITICAL(&s_renderer.lock);
         return same_codec ? ESP_OK : ESP_ERR_INVALID_STATE;
     }
@@ -3452,8 +3319,6 @@ esp_err_t call_video_renderer_start_with_config(
         return ESP_ERR_INVALID_STATE;
     }
     s_renderer.codec = codec;
-    s_renderer.playout_fps = call_video_codec_playout_fps(codec);
-    s_renderer.mjpeg_orientation = config->mjpeg_orientation;
     s_renderer.start_pending = true;
     s_renderer.stop_requested = false;
     s_renderer.faulted = false;
@@ -3489,19 +3354,10 @@ esp_err_t call_video_renderer_start_with_config(
     s_renderer.stale_presented_frames = 0;
     s_renderer.received_pts_valid = false;
     s_renderer.received_pts = 0;
-    s_renderer.mjpeg_rate_samples = 0U;
-    s_renderer.mjpeg_source_interval_us = 0U;
-    s_renderer.mjpeg_rate_locked = false;
     s_renderer.presented_pts_valid = false;
     s_renderer.presented_pts = 0;
     s_renderer.last_received_at_us = 0;
     s_renderer.receive_gap_window_max_us = 0;
-    s_renderer.receive_gap_max_us = 0;
-    s_renderer.present_gap_max_us = 0;
-    s_renderer.receive_gap_250ms = 0;
-    s_renderer.present_gap_250ms = 0;
-    s_renderer.receive_gap_1s = 0;
-    s_renderer.present_gap_1s = 0;
     s_renderer.adaptive_playout_generation = 0U;
     s_renderer.adaptive_playout_generation_seen = 0U;
     s_renderer.adaptive_playout_depth = CALL_VIDEO_ADAPTIVE_PLAYOUT_DEPTH;
@@ -3510,8 +3366,7 @@ esp_err_t call_video_renderer_start_with_config(
     s_renderer.adaptive_playout_activated_at_us = 0;
     s_renderer.adaptive_playout_until_us = 0;
     s_renderer.adaptive_next_present_at_us = 0;
-    s_renderer.adaptive_playout_interval_us =
-        call_video_frame_interval_us(s_renderer.playout_fps);
+    s_renderer.adaptive_playout_interval_us = CALL_VIDEO_ADAPTIVE_PLAYOUT_INTERVAL_US;
     s_renderer.adaptive_playout_started = false;
     s_renderer.last_presented_at_us = 0;
     s_renderer.present_gap_window_max_us = 0;
@@ -3564,23 +3419,25 @@ esp_err_t call_video_renderer_start_with_config(
     uint32_t task_stack_size = codec == CALL_VIDEO_CODEC_MJPEG ?
                                CALL_VIDEO_MJPEG_TASK_STACK_SIZE :
                                CALL_VIDEO_TASK_STACK_SIZE;
-    uint32_t task_stack_caps = APP_TASK_STACK_CAPS_BACKGROUND;
-    BaseType_t task_core = codec == CALL_VIDEO_CODEC_MJPEG ?
-                           APP_TASK_CORE_VIDEO_MJPEG :
-                           APP_TASK_CORE_VIDEO_DECODE;
+    uint32_t task_stack_caps = codec == CALL_VIDEO_CODEC_H264 ?
+                               APP_TASK_STACK_CAPS_BACKGROUND :
+                               APP_TASK_STACK_CAPS_REALTIME;
+    /* Hardware JPEG/PPA completion has the same deadline as camera completion.
+     * Keep the CPU-bound TinyH264 decoder below UI at its existing priority. */
+    UBaseType_t task_priority = codec == CALL_VIDEO_CODEC_MJPEG ?
+                               APP_TASK_PRIORITY_MJPEG : CALL_VIDEO_TASK_PRIORITY;
 
-    /* Both workers own only task-context data, so their stacks can live in
-     * PSRAM. This preserves scarce internal/DMA memory for RTC and ESP-Hosted.
-     * MJPEG is pinned with its PPA/display consumers on CPU1; H264 remains SMP
-     * migratable because its much longer software decode benefits from either
-     * idle core. */
+    /* The H264 worker is a long-lived owner with a large stack. Keep it in
+     * PSRAM so RTC, Wi-Fi and codec DMA retain enough contiguous internal RAM;
+     * compressed, decoded and RGB frame payloads are preallocated in PSRAM as
+     * well. MJPEG keeps the smaller real-time stack in internal memory. */
     BaseType_t task_ret = xTaskCreatePinnedToCoreWithCaps(task_entry,
                                                           task_name,
                                                           task_stack_size,
                                                           NULL,
-                                                          CALL_VIDEO_TASK_PRIORITY,
+                                                          task_priority,
                                                           &s_renderer.task,
-                                                          task_core,
+                                                          APP_TASK_CORE_VIDEO_DECODE,
                                                           task_stack_caps);
     if (task_ret != pdPASS) {
         call_video_reset_session_queues(false);
@@ -3637,15 +3494,6 @@ esp_err_t call_video_renderer_start_with_config(
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
-}
-
-esp_err_t call_video_renderer_start_for_codec(call_video_codec_t codec)
-{
-    const call_video_renderer_config_t config = {
-        .codec = codec,
-        .mjpeg_orientation = CALL_VIDEO_ORIENTATION_KEEP,
-    };
-    return call_video_renderer_start_with_config(&config);
 }
 
 esp_err_t call_video_renderer_start(void)
@@ -3767,8 +3615,6 @@ esp_err_t call_video_renderer_stop(void)
 void call_video_renderer_flush(void)
 {
     call_video_codec_t codec = CALL_VIDEO_CODEC_H264;
-    uint32_t playout_interval_us =
-        call_video_frame_interval_us(APP_MEDIA_CALL_VIDEO_FPS);
 
     if (s_renderer.submit_mutex != NULL &&
         xSemaphoreTake(s_renderer.submit_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
@@ -3776,11 +3622,6 @@ void call_video_renderer_flush(void)
     }
     taskENTER_CRITICAL(&s_renderer.lock);
     codec = s_renderer.codec;
-    s_renderer.playout_fps = call_video_codec_playout_fps(codec);
-    s_renderer.mjpeg_rate_samples = 0U;
-    s_renderer.mjpeg_source_interval_us = 0U;
-    s_renderer.mjpeg_rate_locked = false;
-    playout_interval_us = call_video_frame_interval_us(s_renderer.playout_fps);
     s_renderer.generation++;
     s_renderer.waiting_for_key_frame = codec == CALL_VIDEO_CODEC_H264;
     s_renderer.latency_recovery_pending = false;
@@ -3812,7 +3653,7 @@ void call_video_renderer_flush(void)
         s_renderer.adaptive_playout_generation_seen =
             s_renderer.adaptive_playout_generation;
         s_renderer.adaptive_next_present_at_us = 0;
-        s_renderer.adaptive_playout_interval_us = playout_interval_us;
+        s_renderer.adaptive_playout_interval_us = CALL_VIDEO_ADAPTIVE_PLAYOUT_INTERVAL_US;
         s_renderer.adaptive_playout_started = false;
         xSemaphoreGive(s_renderer.frame_mutex);
     }
@@ -4064,6 +3905,8 @@ esp_err_t call_video_renderer_submit_mjpeg(const uint8_t *data,
 
 esp_err_t call_video_renderer_present_next_rgb565(const uint16_t **pixels,
                                                    size_t *pixel_count,
+                                                   uint16_t *width,
+                                                   uint16_t *height,
                                                    uint32_t *sequence,
                                                    call_video_frame_trace_t *trace)
 {
@@ -4082,17 +3925,12 @@ esp_err_t call_video_renderer_present_next_rgb565(const uint16_t **pixels,
     const int64_t now_us = esp_timer_get_time();
     uint32_t adaptive_generation = 0U;
     uint8_t adaptive_depth = CALL_VIDEO_ADAPTIVE_PLAYOUT_DEPTH;
-    uint8_t playout_fps = APP_MEDIA_CALL_VIDEO_FPS;
     int64_t adaptive_activated_at_us = 0;
-    int64_t adaptive_until_us = 0;
     taskENTER_CRITICAL(&s_renderer.lock);
     adaptive_generation = s_renderer.adaptive_playout_generation;
     adaptive_depth = s_renderer.adaptive_playout_depth;
-    playout_fps = s_renderer.playout_fps;
     adaptive_activated_at_us = s_renderer.adaptive_playout_activated_at_us;
-    adaptive_until_us = s_renderer.adaptive_playout_until_us;
     taskEXIT_CRITICAL(&s_renderer.lock);
-    const uint32_t playout_interval_us = call_video_frame_interval_us(playout_fps);
 
     /*
      * Normal calls remain a latest-frame, minimum-latency path. A measured
@@ -4103,7 +3941,7 @@ esp_err_t call_video_renderer_present_next_rgb565(const uint16_t **pixels,
      * hide decode/transport errors or keep a stale weak-network mode after the
      * input cadence has recovered.
      */
-    const bool adaptive_playout = adaptive_until_us > now_us;
+    const bool adaptive_playout = call_video_adaptive_playout_is_active(now_us);
     if (adaptive_generation != s_renderer.adaptive_playout_generation_seen) {
         s_renderer.adaptive_playout_generation_seen = adaptive_generation;
         /* When weak-network mode is detected after video is already visible,
@@ -4115,12 +3953,12 @@ esp_err_t call_video_renderer_present_next_rgb565(const uint16_t **pixels,
             s_renderer.presented_output_slot < CALL_VIDEO_OUTPUT_SLOT_COUNT;
         s_renderer.adaptive_next_present_at_us =
             s_renderer.adaptive_playout_started ? now_us : 0;
-        s_renderer.adaptive_playout_interval_us = playout_interval_us;
+        s_renderer.adaptive_playout_interval_us = CALL_VIDEO_ADAPTIVE_PLAYOUT_INTERVAL_US;
     }
     if (!adaptive_playout) {
         s_renderer.adaptive_playout_started = false;
         s_renderer.adaptive_next_present_at_us = 0;
-        s_renderer.adaptive_playout_interval_us = playout_interval_us;
+        s_renderer.adaptive_playout_interval_us = CALL_VIDEO_ADAPTIVE_PLAYOUT_INTERVAL_US;
     } else {
         if (!s_renderer.adaptive_playout_started) {
             if (s_renderer.ready_output_count < adaptive_depth) {
@@ -4130,7 +3968,7 @@ esp_err_t call_video_renderer_present_next_rgb565(const uint16_t **pixels,
             s_renderer.adaptive_playout_started = true;
             s_renderer.adaptive_next_present_at_us = now_us;
             s_renderer.adaptive_playout_interval_us =
-                playout_interval_us;
+                CALL_VIDEO_ADAPTIVE_PLAYOUT_INTERVAL_US;
             ESP_LOGI(TAG,
                      "adaptive video playout primed: depth=%u delay=%lums",
                      (unsigned)s_renderer.ready_output_count,
@@ -4154,8 +3992,7 @@ esp_err_t call_video_renderer_present_next_rgb565(const uint16_t **pixels,
     if (adaptive_playout) {
         uint32_t next_interval_us = call_video_adaptive_playout_interval(
             s_renderer.ready_output_count,
-            adaptive_depth,
-            playout_fps);
+            adaptive_depth);
         s_renderer.adaptive_playout_interval_us = next_interval_us;
         /* Advance a stable deadline instead of restarting the interval after
          * each blocking LCD transfer. Restart only after a real outage so the
@@ -4195,10 +4032,12 @@ esp_err_t call_video_renderer_present_next_rgb565(const uint16_t **pixels,
     taskEXIT_CRITICAL(&s_renderer.lock);
 
     int64_t handoff_started_us = esp_timer_get_time();
-    if (trace != NULL && ready->trace.frame_index > 0U) {
-        ready->trace.output_wait_us = call_video_elapsed_us(
-            ready->trace_ready_at_us,
-            handoff_started_us);
+    if (trace != NULL) {
+        if (ready->trace.frame_index > 0U) {
+            ready->trace.output_wait_us = call_video_elapsed_us(
+                ready->trace_ready_at_us,
+                handoff_started_us);
+        }
         *trace = ready->trace;
     }
     if (s_renderer.presented_output_slot < CALL_VIDEO_OUTPUT_SLOT_COUNT) {
@@ -4207,7 +4046,9 @@ esp_err_t call_video_renderer_present_next_rgb565(const uint16_t **pixels,
     ready->state = CALL_VIDEO_OUTPUT_PRESENTED;
     s_renderer.presented_output_slot = ready_index;
     *pixels = ready->pixels;
-    *pixel_count = CALL_VIDEO_FRAME_PIXELS;
+    *pixel_count = (size_t)ready->width * ready->height;
+    if (width != NULL) *width = ready->width;
+    if (height != NULL) *height = ready->height;
     if (sequence != NULL) {
         *sequence = ready->sequence;
     }
@@ -4224,11 +4065,6 @@ esp_err_t call_video_renderer_present_next_rgb565(const uint16_t **pixels,
         if (gap_us > s_renderer.present_gap_window_max_us) {
             s_renderer.present_gap_window_max_us = gap_us;
         }
-        if (gap_us > s_renderer.present_gap_max_us) {
-            s_renderer.present_gap_max_us = gap_us;
-        }
-        s_renderer.present_gap_250ms += gap_us >= 250000U;
-        s_renderer.present_gap_1s += gap_us >= 1000000U;
     }
     s_renderer.last_presented_at_us = presented_at_us;
     s_renderer.present_copy_time_us += handoff_elapsed_us;
@@ -4265,7 +4101,6 @@ void call_video_renderer_get_stats(call_video_renderer_stats_t *stats)
      * invoking the media callback after the input queue begins rejecting it. */
     (void)call_video_renderer_detect_decode_fault(esp_timer_get_time());
     memset(stats, 0, sizeof(*stats));
-    const int64_t now_us = esp_timer_get_time();
     taskENTER_CRITICAL(&s_renderer.lock);
     stats->running = s_renderer.running;
     stats->waiting_for_key_frame = s_renderer.waiting_for_key_frame;
@@ -4295,22 +4130,6 @@ void call_video_renderer_get_stats(call_video_renderer_stats_t *stats)
     stats->conversion_swap_max_us = s_renderer.convert_swap_max_us;
     stats->discontinuities = s_renderer.discontinuities;
     stats->input_overflows = s_renderer.input_overflows;
-    stats->receive_gap_max_us = s_renderer.receive_gap_max_us;
-    stats->present_gap_max_us = s_renderer.present_gap_max_us;
-    stats->receive_gap_250ms = s_renderer.receive_gap_250ms;
-    stats->present_gap_250ms = s_renderer.present_gap_250ms;
-    stats->receive_gap_1s = s_renderer.receive_gap_1s;
-    stats->present_gap_1s = s_renderer.present_gap_1s;
-    if (s_renderer.running && s_renderer.last_received_at_us > 0) {
-        stats->receive_age_us = call_video_elapsed_us(s_renderer.last_received_at_us, now_us);
-    }
-    if (s_renderer.running && s_renderer.last_presented_at_us > 0) {
-        stats->present_age_us = call_video_elapsed_us(s_renderer.last_presented_at_us, now_us);
-    }
-    stats->decode_time_us = s_renderer.decode_access_unit_time_us;
-    stats->decode_max_us = s_renderer.decode_access_unit_max_us;
-    stats->playout_fps = s_renderer.playout_fps;
-    stats->adaptive_playout = s_renderer.adaptive_playout_until_us > now_us;
     stats->latest_sequence = s_renderer.latest_sequence;
     taskEXIT_CRITICAL(&s_renderer.lock);
     stats->queue_depth = call_video_input_queue_depth();

@@ -33,21 +33,10 @@ typedef struct lvgl_port_ctx_s {
     int                 timer_period_ms;
 } lvgl_port_ctx_t;
 
-typedef struct {
-    portMUX_TYPE mux;
-    TaskHandle_t owner;
-    const char *owner_name;
-    uint32_t depth;
-    int64_t since_us;
-} lvgl_port_lock_trace_t;
-
 /*******************************************************************************
 * Local variables
 *******************************************************************************/
 static lvgl_port_ctx_t lvgl_port_ctx;
-static lvgl_port_lock_trace_t lvgl_port_lock_trace = {
-    .mux = portMUX_INITIALIZER_UNLOCKED,
-};
 
 /*******************************************************************************
 * Function definitions
@@ -142,55 +131,12 @@ bool lvgl_port_lock(uint32_t timeout_ms)
     assert(lvgl_port_ctx.lvgl_mux && "lvgl_port_init must be called first");
 
     const TickType_t timeout_ticks = (timeout_ms == 0) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
-    if (xSemaphoreTakeRecursive(lvgl_port_ctx.lvgl_mux, timeout_ticks) == pdTRUE) {
-        TaskHandle_t current = xTaskGetCurrentTaskHandle();
-        taskENTER_CRITICAL(&lvgl_port_lock_trace.mux);
-        if (lvgl_port_lock_trace.owner == current) {
-            lvgl_port_lock_trace.depth++;
-        } else {
-            lvgl_port_lock_trace.owner = current;
-            lvgl_port_lock_trace.owner_name = pcTaskGetName(current);
-            lvgl_port_lock_trace.depth = 1;
-            lvgl_port_lock_trace.since_us = esp_timer_get_time();
-        }
-        taskEXIT_CRITICAL(&lvgl_port_lock_trace.mux);
-        return true;
-    }
-
-    const char *owner_name = "none";
-    uint32_t owner_depth = 0;
-    int64_t held_ms = 0;
-    taskENTER_CRITICAL(&lvgl_port_lock_trace.mux);
-    if (lvgl_port_lock_trace.owner_name != NULL) {
-        owner_name = lvgl_port_lock_trace.owner_name;
-        owner_depth = lvgl_port_lock_trace.depth;
-        held_ms = (esp_timer_get_time() - lvgl_port_lock_trace.since_us) / 1000;
-    }
-    taskEXIT_CRITICAL(&lvgl_port_lock_trace.mux);
-    ESP_LOGE(TAG,
-             "LVGL mutex lock timeout: waiter=%s timeout=%ums owner=%s depth=%lu held=%lldms",
-             pcTaskGetName(NULL),
-             (unsigned)timeout_ms,
-             owner_name,
-             (unsigned long)owner_depth,
-             (long long)held_ms);
-    return false;
+    return xSemaphoreTakeRecursive(lvgl_port_ctx.lvgl_mux, timeout_ticks) == pdTRUE;
 }
 
 void lvgl_port_unlock(void)
 {
     assert(lvgl_port_ctx.lvgl_mux && "lvgl_port_init must be called first");
-    TaskHandle_t current = xTaskGetCurrentTaskHandle();
-    taskENTER_CRITICAL(&lvgl_port_lock_trace.mux);
-    if (lvgl_port_lock_trace.owner == current && lvgl_port_lock_trace.depth > 0) {
-        lvgl_port_lock_trace.depth--;
-        if (lvgl_port_lock_trace.depth == 0) {
-            lvgl_port_lock_trace.owner = NULL;
-            lvgl_port_lock_trace.owner_name = NULL;
-            lvgl_port_lock_trace.since_us = 0;
-        }
-    }
-    taskEXIT_CRITICAL(&lvgl_port_lock_trace.mux);
     xSemaphoreGiveRecursive(lvgl_port_ctx.lvgl_mux);
 }
 
@@ -225,7 +171,7 @@ static void lvgl_port_task(void *arg)
     ESP_LOGI(TAG, "Starting LVGL task");
     lvgl_port_ctx.running = true;
     while (lvgl_port_ctx.running) {
-        if (lvgl_port_lock(1000)) {
+        if (lvgl_port_lock(0)) {
             task_delay_ms = lv_timer_handler();
             lvgl_port_unlock();
         }

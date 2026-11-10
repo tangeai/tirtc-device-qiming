@@ -20,6 +20,7 @@ typedef enum {
 } display_driver_orientation_t;
 
 esp_err_t display_driver_init(display_driver_handles_t *handles);
+void display_driver_log_ppa_diagnostics(void);
 bool display_driver_is_initialized(void);
 uint16_t display_driver_width(void);
 uint16_t display_driver_height(void);

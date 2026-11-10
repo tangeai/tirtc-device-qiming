@@ -1,3 +1,4 @@
+# XiaoTai OTA layout. First migration replaces prior firmware partitions/settings.
 # Name,     Type, SubType,  Offset,    Size,      Flags
 nvs,        data, nvs,      0x9000,    0x4000,
 otadata,    data, ota,      0xD000,    0x2000,

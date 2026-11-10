@@ -9,7 +9,38 @@ if(NOT EXISTS "${TIRTC_LIB}")
     message(FATAL_ERROR "TiRTC static library not found: ${TIRTC_LIB}")
 endif()
 
+# Official TiRTC v2.6.0 Mini P4 package (TGTRP 1.5.29).
+# Not interchangeable with the S3 SDK.
+if(NOT IDF_TARGET STREQUAL "esp32p4")
+    message(FATAL_ERROR "XiaoTai P4 requires the ESP32-P4 target")
+endif()
+if(NOT IDF_VERSION_MAJOR EQUAL 5 OR NOT IDF_VERSION_MINOR EQUAL 5 OR
+   IDF_VERSION_PATCH LESS 4 OR IDF_VERSION_PATCH GREATER 5)
+    message(FATAL_ERROR "The pinned TiRTC P4 baseline requires ESP-IDF 5.5.4 or 5.5.5")
+endif()
+if(NOT CONFIG_FREERTOS_HZ EQUAL 1000 OR
+   CONFIG_FREERTOS_USE_TRACE_FACILITY OR CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS OR
+   CONFIG_FREERTOS_USE_STATS_FORMATTING_FUNCTIONS)
+    message(FATAL_ERROR "TiRTC P4 requires 1000 Hz ticks and disabled trace/runtime stats")
+endif()
+file(SHA256 "${TIRTC_LIB}" TIRTC_LIB_SHA256)
+if(NOT TIRTC_LIB_SHA256 STREQUAL
+    "554295a06173478ba51cb6fc4fc42a09431787377aef7e4ded4ab17165f39cac")
+    message(FATAL_ERROR "TiRTC archive differs from the pinned P4 baseline; review its ABI before updating the contract")
+endif()
+if(CONFIG_XIAOTAI_TIRTC_HTTP)
+    message(STATUS "TiRTC v2.6.0 Mini: explicit HTTP endpoint policy; platform APIs retain TLS")
+else()
+    message(WARNING "TiRTC v2.6.0 Mini has SSL disabled; HTTPS endpoints will be rejected")
+endif()
+
 add_library(tirtc_single_prebuilt STATIC IMPORTED)
+file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/manifest/build-contract.env"
+    TIRTC_SEMAPHORE_CONTRACT REGEX "^STATIC_SEMAPHORE_T_SIZE=[0-9]+$")
+if(NOT TIRTC_SEMAPHORE_CONTRACT STREQUAL "STATIC_SEMAPHORE_T_SIZE=84")
+    message(FATAL_ERROR "Pinned P4 archive requires an 84-byte StaticSemaphore_t (see VERSION.md)")
+endif()
+target_compile_definitions(${COMPONENT_LIB} INTERFACE TIRTC_SDK_STATIC_SEMAPHORE_SIZE=84)
 set_target_properties(tirtc_single_prebuilt PROPERTIES IMPORTED_LOCATION "${TIRTC_LIB}")
 
 # libwebrtc_nosctp.a is bundled into libTiRTC.a; the app links this SDK archive only.

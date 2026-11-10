@@ -1,3 +1,63 @@
+## Unreleased
+
+- Added `V4L2_CID_USER_ESP_ISP_DPC_DYNAMIC` and ISP pipeline control to apply IPA DPC metadata to hardware
+
+## 2.5.0
+
+- Added ISP pipeline APIs to enumerate and switch IPA JSON configurations at runtime
+    - ``esp_video_isp_pipeline_enum_ipa_configs()`` enumerates configurations of the same sensor
+    - ``esp_video_isp_pipeline_set_ipa_config()`` rebuilds the live IPA pipeline from a new configuration
+- Added ``VIDIOC_ENUM_SENSOR_FMT`` to enumerate camera sensor output formats
+    - Recommended flow: enumerate/set sensor format first, then use standard ``VIDIOC_ENUM_FMT`` / ``VIDIOC_S_FMT`` for device output formats and capture
+    - ``VIDIOC_S_SENSOR_FMT`` now fails with ``ESP_ERR_INVALID_STATE`` (``EBUSY``) if video buffers are allocated; free them with ``VIDIOC_REQBUFS`` count=0 first
+- Added DVP YUV422 YUYV to RGB565 format conversion via ``VIDIOC_ENUM_FMT`` / ``VIDIOC_S_FMT``
+    - Conversion is supported only when the sensor output is YUV422 YUYV, not UYVY
+    - Converted RGB565 is big-endian (``V4L2_PIX_FMT_RGB565X``), not little-endian (``V4L2_PIX_FMT_RGB565``)
+    - The feature is disabled if the `CAM_CTRL_DVP_ENABLE` option is selected and ESP-IDF version >= 5.5.2
+- Added functions to get IPA environment variables as int32_t or float
+- Added options to enable or disable MIPI-CSI event handling and configure the behavior for different targets
+- Added automatic transformation of YUV sensor data to the target YUV format
+- Added an option to use a customized esp_h264 version instead of the version defined in `esp_video/idf_component.yml`
+
+- Updated to use esp_cam_sensor v2.6.x
+- Updated to use esp_ipa v2.4.x
+- Updated to use esp_h264 v1.4.x
+
+- Disabled MIPI-CSI event handling by default in the example_video_common component
+    - Some sensors or video transform modules do not support stopping and restarting the stream, so this feature cannot be enabled by default. Unexpected events may restart these components and prevent some users from receiving images.
+    - If you use MIPI-CSI event handling, please enable the related options manually or add them to sdkconfig.defaults
+
+## 2.4.1
+
+- Fixed ISP driver compatibility when `ESP_VIDEO_DISABLE_ISP_ERROR_INTERRUPT` is enabled
+- Fixed unclear error codes returned by some functions
+- Fixed compilation warning in ISP video device
+- Improved compatibility with different versions of the MIPI-CSI driver
+    - If the esp-idf version does not support MIPI-CSI error events, the commands VIDIOC_SUBSCRIBE_EVENT, VIDIOC_UNSUBSCRIBE_EVENT, and VIDIOC_DQEVENT are not available.
+      Therefore, applications should avoid calling these commands or any related functions.
+    - In esp-idf v5.5.6 and certain earlier intermediate versions, the MIPI-CSI driver was refactored to add support for format transformation. As a result, the capability macro `ESP_VIDEO_CSI_DEVICE_CONV_FORMAT` should be enabled in these versions.
+
+## 2.4.0
+
+- H.264 video device now supports setting parameters after streaming has started
+- Added a control ID to enable or disable ISP bypass mode when both the input and output formats are RAW8
+- Added functions to enable or disable AGC and to retrieve the current AGC status
+- Added spiram no encryption used when flash encryption used
+- Added support for configuring and retrieving the frames per second (FPS) setting on the H.264 video device
+- Added support for the VIDIOC_SUBSCRIBE_EVENT, VIDIOC_UNSUBSCRIBE_EVENT, and VIDIOC_DQEVENT commands.
+    - Supports the V4L2_EVENT_ESP_MIPI_CSI_ERROR event type
+    - Provided common example functions for event tracing
+    - Only MIPI-CSI video device support this command
+- Added VIDIOC_RESTART commands to restart video device if some hardware issues trigger
+    - Only MIPI-CSI video device support this command
+- Added the `ESP_VIDEO_DISABLE_ISP_ERROR_INTERRUPT` option to help prevent unwanted hardware watchdog resets caused by frequent ISP error interrupts
+- Added a function to dump ISP statistics data while the IPA task is running
+- Added a function to configure the AWB, AE, AF, and Histogram windows
+- Added functions to set and retrieve the minimum and maximum exposure values
+
+- Fixed a warning related to the ISP AWB subwindow during initialization
+- Update to use esp_cam_sensor v2.4.x
+
 ## 2.3.0
 
 - Added information about the document system to README.md.

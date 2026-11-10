@@ -1,4 +1,5 @@
 #include "camera_driver.h"
+#include "camera_frame_layout.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -9,6 +10,7 @@
 #include <unistd.h>
 
 #include "esp_check.h"
+#include "driver/i2c_master.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_video_device.h"
@@ -35,7 +37,8 @@ static const char *TAG = "camera";
 #define CAMERA_DRIVER_MEMORY_TYPE      V4L2_MEMORY_USERPTR
 #define CAMERA_DRIVER_BUFFER_ALIGNMENT 64U
 #define CAMERA_DRIVER_MAX_FRAME_BYTES  \
-	((size_t)HARDWARE_BOARD_CAMERA_WIDTH * HARDWARE_BOARD_CAMERA_HEIGHT * 3U / 2U)
+	((size_t)HARDWARE_BOARD_CAMERA_WIDTH * \
+	 ((HARDWARE_BOARD_CAMERA_HEIGHT + 15U) & ~15U) * 3U / 2U)
 
 typedef struct {
 	struct v4l2_buffer buffer;
@@ -58,10 +61,11 @@ static bool s_frame_outstanding;
 static uint32_t s_client_count;
 static uint16_t s_target_width = HARDWARE_BOARD_CAMERA_WIDTH;
 static uint16_t s_target_height = HARDWARE_BOARD_CAMERA_HEIGHT;
-static uint8_t s_target_fps = HARDWARE_BOARD_CAMERA_FPS;
+static uint8_t s_target_fps = 30;
 static uint8_t s_sensor_fps;
-static uint32_t s_delivery_sequence;
 static dw_gdma_channel_handle_t s_csi_dma_clock_guard;
+static i2c_master_dev_handle_t s_sensor_control;
+static esp_err_t camera_driver_verify_sensor(void);
 
 static esp_err_t camera_driver_prepare_persistent_buffers(void)
 {
@@ -182,8 +186,8 @@ static void camera_driver_prepare_pix_format(struct v4l2_format *format, uint32_
 	format->fmt.pix.pixelformat = pixelformat;
 	format->fmt.pix.field = V4L2_FIELD_NONE;
 	format->fmt.pix.colorspace = V4L2_COLORSPACE_DEFAULT;
-	format->fmt.pix.ycbcr_enc = V4L2_YCBCR_ENC_DEFAULT;
-	format->fmt.pix.quantization = V4L2_QUANTIZATION_DEFAULT;
+	format->fmt.pix.ycbcr_enc = V4L2_YCBCR_ENC_601;
+	format->fmt.pix.quantization = V4L2_QUANTIZATION_FULL_RANGE;
 	format->fmt.pix.xfer_func = V4L2_XFER_FUNC_DEFAULT;
 	format->fmt.pix.bytesperline = 0;
 	format->fmt.pix.sizeimage = 0;
@@ -238,7 +242,7 @@ static esp_err_t camera_driver_video_init_once(void)
 	ESP_RETURN_ON_ERROR(camera_driver_hold_csi_dma_clock(), TAG,
 			    "CSI DMA guard init failed");
 
-	ESP_RETURN_ON_ERROR(hardware_board_prepare_camera(), TAG, "camera hardware not ready");
+	ESP_RETURN_ON_ERROR(hardware_board_init_i2c(), TAG, "camera i2c init failed");
 	i2c_master_bus_handle_t i2c_bus = hardware_board_get_i2c_bus_handle();
 	ESP_RETURN_ON_FALSE(i2c_bus != NULL, ESP_ERR_INVALID_STATE, TAG, "camera i2c handle missing");
 
@@ -248,6 +252,7 @@ static esp_err_t camera_driver_video_init_once(void)
 			.i2c_handle = i2c_bus,
 			.freq = HARDWARE_BOARD_CAMERA_I2C_FREQ_HZ,
 		},
+		/* CAM_IO0 supplies/releases the module; a sensor reset pulse cuts power. */
 		.reset_pin = -1,
 		.pwdn_pin = -1,
 	};
@@ -277,19 +282,17 @@ static esp_err_t camera_driver_open_device(void)
 	s_fd = open(ESP_VIDEO_MIPI_CSI_DEVICE_NAME, O_RDONLY | O_NONBLOCK);
 	ESP_RETURN_ON_FALSE(s_fd >= 0, ESP_FAIL, TAG, "open %s failed errno=%d", ESP_VIDEO_MIPI_CSI_DEVICE_NAME, errno);
 
-	/* esp_video's VFS does not derive DQBUF behavior from O_NONBLOCK. Set its
-	 * private dequeue timeout explicitly so camera_driver_capture() owns the
-	 * polling deadline and can drain the completed FIFO without blocking. */
-	struct timeval dequeue_timeout = {0};
-	if (ioctl(s_fd, VIDIOC_S_DQBUF_TIMEOUT, &dequeue_timeout) != 0) {
-		ESP_LOGE(TAG, "set camera dequeue timeout failed errno=%d", errno);
+	if (ioctl(s_fd, VIDIOC_QUERYCAP, &capability) != 0) {
+		ESP_LOGE(TAG, "query camera capability failed errno=%d", errno);
 		close(s_fd);
 		s_fd = -1;
 		return ESP_FAIL;
 	}
 
-	if (ioctl(s_fd, VIDIOC_QUERYCAP, &capability) != 0) {
-		ESP_LOGE(TAG, "query camera capability failed errno=%d", errno);
+	/* O_NONBLOCK is ignored by esp_video's VFS; DQBUF has its own timeout. */
+	struct timeval dequeue_timeout = {0};
+	if (ioctl(s_fd, VIDIOC_S_DQBUF_TIMEOUT, &dequeue_timeout) != 0) {
+		ESP_LOGE(TAG, "set camera dequeue timeout failed errno=%d", errno);
 		close(s_fd);
 		s_fd = -1;
 		return ESP_FAIL;
@@ -360,6 +363,9 @@ static esp_err_t camera_driver_config_format(void)
 	if (format.fmt.pix.pixelformat != CAMERA_DRIVER_TARGET_FORMAT) {
 		return ESP_ERR_NOT_SUPPORTED;
 	}
+	ESP_RETURN_ON_FALSE(format.fmt.pix.width == s_target_width &&
+	                    format.fmt.pix.height == s_target_height,
+	                    ESP_ERR_INVALID_SIZE, TAG, "SC2336 native geometry mismatch");
 
 	s_active_format = format;
 	return ESP_OK;
@@ -427,18 +433,12 @@ static void camera_driver_requeue_buffer(const struct v4l2_buffer *buf, const ch
 
 static void camera_driver_config_frame_rate(void)
 {
-	/* The selected SC2336 mode is a fixed-rate sensor mode. Keep CSI/ISP at
-	 * that native cadence and let each media consumer pace its own output.
-	 * Sending an unsupported 1/12 or 1/20 interval to this mode is rejected by
-	 * esp_video and does not provide useful load reduction. */
+	/* SC2336's selected sensor mode is fixed at 30 fps; consumers pace output. */
 	if (s_sensor_fps > 0U) {
-		ESP_LOGI(TAG,
-			 "camera cadence: sensor=%ufps target=%ufps pacing=application",
-			 (unsigned)s_sensor_fps,
-			 (unsigned)s_target_fps);
+		ESP_LOGI(TAG, "camera cadence: sensor=%ufps target=%ufps pacing=application",
+		         (unsigned)s_sensor_fps, (unsigned)s_target_fps);
 		return;
 	}
-
 	struct v4l2_streamparm parm = {
 		.type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
 	};
@@ -603,7 +603,6 @@ static void camera_driver_cleanup(void)
 	}
 	s_frame_outstanding = false;
 	s_sensor_fps = 0U;
-	s_delivery_sequence = 0U;
 	memset(&s_active_frame, 0, sizeof(s_active_frame));
 	memset(&s_active_format, 0, sizeof(s_active_format));
 	s_camera_initialized = false;
@@ -637,15 +636,22 @@ esp_err_t camera_driver_prepare_video_subsystem(void)
 
 esp_err_t camera_driver_set_stream_target(uint16_t width, uint16_t height, uint8_t fps)
 {
-	ESP_RETURN_ON_FALSE(width == HARDWARE_BOARD_CAMERA_WIDTH &&
-			    height == HARDWARE_BOARD_CAMERA_HEIGHT,
-			    ESP_ERR_NOT_SUPPORTED,
-			    TAG,
-			    "camera capture mode unsupported: requested=%ux%u native=%ux%u; scale in consumer pipeline",
-			    (unsigned)width,
-			    (unsigned)height,
-			    (unsigned)HARDWARE_BOARD_CAMERA_WIDTH,
-			    (unsigned)HARDWARE_BOARD_CAMERA_HEIGHT);
+	if (width < 320U) {
+		width = 320U;
+	} else if (width > HARDWARE_BOARD_CAMERA_WIDTH) {
+		width = HARDWARE_BOARD_CAMERA_WIDTH;
+	}
+	if (height < 240U) {
+		height = 240U;
+	} else if (height > HARDWARE_BOARD_CAMERA_HEIGHT) {
+		height = HARDWARE_BOARD_CAMERA_HEIGHT;
+	}
+	if ((width & 1U) != 0U) {
+		width--;
+	}
+	if ((height & 1U) != 0U) {
+		height--;
+	}
 	if (fps < 5U) {
 		fps = 5U;
 	} else if (fps > 30U) {
@@ -704,10 +710,6 @@ esp_err_t camera_driver_set_stream_target(uint16_t width, uint16_t height, uint8
 
 esp_err_t camera_driver_init(void)
 {
-	ESP_RETURN_ON_FALSE(hardware_board_has_camera(),
-			    ESP_ERR_NOT_SUPPORTED,
-			    TAG,
-			    "camera is not available on this board profile");
 	ESP_RETURN_ON_ERROR(camera_driver_init_lock(), TAG, "camera lock init failed");
 
 	if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(5000)) != pdTRUE) {
@@ -740,6 +742,9 @@ esp_err_t camera_driver_init(void)
 		camera_driver_config_frame_rate();
 	}
 	if (ret == ESP_OK) {
+		ret = camera_driver_verify_sensor();
+	}
+	if (ret == ESP_OK) {
 		ret = camera_driver_prepare_buffers();
 	}
 	if (ret == ESP_OK) {
@@ -751,9 +756,7 @@ esp_err_t camera_driver_init(void)
 		ESP_LOGI(TAG, "camera ready");
 	} else {
 		camera_driver_cleanup();
-		if (!s_video_ready || !HARDWARE_BOARD_CAMERA_KEEP_POWERED) {
-			(void)hardware_board_set_camera_power(false);
-		}
+		if (!s_video_ready) (void)hardware_board_set_camera_power(false);
 	}
 
 	xSemaphoreGive(s_lock);
@@ -789,9 +792,7 @@ void camera_driver_release_device(void)
 	ESP_LOGD(TAG, "camera release device: clients=%" PRIu32, s_client_count);
 	if (cleanup) {
 		camera_driver_cleanup();
-		if (!HARDWARE_BOARD_CAMERA_KEEP_POWERED) {
-			(void)hardware_board_set_camera_power(false);
-		}
+		if (!s_video_ready) (void)hardware_board_set_camera_power(false);
 	}
 	xSemaphoreGive(s_lock);
 }
@@ -803,8 +804,7 @@ esp_err_t camera_driver_capture(camera_driver_frame_t *frame)
 
 	const int64_t deadline_us = esp_timer_get_time() + ((int64_t)CAMERA_DRIVER_FRAME_TIMEOUT_MS * 1000);
 	esp_err_t ret = ESP_ERR_TIMEOUT;
-	uint32_t completed_frames_drained = 0U;
-	bool frame_ready = false;
+	uint32_t stale_frames_dropped = 0U;
 	struct v4l2_buffer buf = {
 		.type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
 		.memory = CAMERA_DRIVER_MEMORY_TYPE,
@@ -824,40 +824,20 @@ esp_err_t camera_driver_capture(camera_driver_frame_t *frame)
 		vTaskDelay(pdMS_TO_TICKS(CAMERA_DRIVER_FRAME_BUSY_WAIT_MS));
 	}
 
-	/* esp_video 2.3.0 exposes completed buffers as a FIFO and leaves the V4L2
-	 * sequence/timestamp fields unset. Drain all frames already completed at
-	 * this application cadence and retain the newest dequeued buffer. This
-	 * bounds latency without relying on metadata the driver does not provide. */
+	/* esp_video does not populate sequence or timestamp in DQBUF. */
 	while (esp_timer_get_time() < deadline_us) {
-		struct v4l2_buffer candidate = {
-			.type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
-			.memory = CAMERA_DRIVER_MEMORY_TYPE,
-		};
-		if (ioctl(s_fd, VIDIOC_DQBUF, &candidate) == 0) {
-			if (!camera_driver_buffer_is_usable(&candidate)) {
-				camera_driver_requeue_buffer(&candidate, "invalid");
-				if (!frame_ready) {
-					ret = ESP_FAIL;
-				}
+		if (ioctl(s_fd, VIDIOC_DQBUF, &buf) == 0) {
+			if (!camera_driver_buffer_is_usable(&buf)) {
+				camera_driver_requeue_buffer(&buf, "invalid");
+				ret = ESP_FAIL;
 				break;
 			}
-			if (frame_ready) {
-				camera_driver_requeue_buffer(&buf, "superseded");
-				completed_frames_drained++;
-			}
-			buf = candidate;
-			frame_ready = true;
 			ret = ESP_OK;
-			continue;
-		}
-		/* No ready element is reported as ESP_FAIL/EPERM by esp_video 2.3.0.
-		 * EAGAIN and ETIMEDOUT are accepted for forward compatibility. */
-		if (errno != EPERM && errno != EAGAIN && errno != ETIMEDOUT) {
-			ESP_LOGE(TAG, "dequeue camera frame failed errno=%d", errno);
-			ret = ESP_FAIL;
 			break;
 		}
-		if (frame_ready) {
+		if (errno != EAGAIN && errno != ETIMEDOUT) {
+			ESP_LOGE(TAG, "dequeue camera frame failed errno=%d", errno);
+			ret = ESP_FAIL;
 			break;
 		}
 		vTaskDelay(pdMS_TO_TICKS(CAMERA_DRIVER_FRAME_POLL_WAIT_MS));
@@ -867,21 +847,54 @@ esp_err_t camera_driver_capture(camera_driver_frame_t *frame)
 		xSemaphoreGive(s_lock);
 		return ret;
 	}
+
+	/* Completed buffers are FIFO. Keep only the newest available frame, but
+	 * cap the drain to the fixed capture pool so a live producer cannot spin us. */
+	for (uint32_t i = 1; i < HARDWARE_BOARD_CAMERA_BUFFER_COUNT; ++i) {
+		struct v4l2_buffer next = {
+			.type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
+			.memory = CAMERA_DRIVER_MEMORY_TYPE,
+		};
+		if (ioctl(s_fd, VIDIOC_DQBUF, &next) != 0) {
+			if (errno != EAGAIN && errno != ETIMEDOUT) {
+				ESP_LOGW(TAG, "drain camera frame failed errno=%d", errno);
+			}
+			break;
+		}
+		if (!camera_driver_buffer_is_usable(&next)) {
+			camera_driver_requeue_buffer(&next, "invalid");
+			break;
+		}
+		camera_driver_requeue_buffer(&buf, "older");
+		buf = next;
+		stale_frames_dropped++;
+	}
+
 	if (!camera_driver_bind_user_buffer(&buf)) {
 		ESP_LOGE(TAG, "bind dequeued camera buffer failed index=%u", (unsigned)buf.index);
 		xSemaphoreGive(s_lock);
 		return ESP_FAIL;
+	}
+	size_t data_len = buf.bytesused != 0 ? buf.bytesused : s_active_format.fmt.pix.sizeimage;
+	data_len = camera_frame_pad_yuv420(s_buffers[buf.index], data_len,
+	                                  s_buffer_capacities[buf.index],
+	                                  s_active_format.fmt.pix.width,
+	                                  s_active_format.fmt.pix.height);
+	if (data_len == 0U) {
+		camera_driver_requeue_buffer(&buf, "invalid-size");
+		xSemaphoreGive(s_lock);
+		return ESP_ERR_INVALID_SIZE;
 	}
 	memset(frame, 0, sizeof(*frame));
 	s_active_frame.buffer = buf;
 	s_frame_outstanding = true;
 
 	frame->data = (const uint8_t *)s_buffers[buf.index];
-	frame->data_len = buf.bytesused != 0 ? buf.bytesused : buf.length;
+	frame->data_len = data_len;
 	frame->width = (uint16_t)s_active_format.fmt.pix.width;
 	frame->height = (uint16_t)s_active_format.fmt.pix.height;
-	frame->sequence = s_delivery_sequence++;
-	frame->stale_frames_dropped = completed_frames_drained;
+	frame->sequence = buf.sequence;
+	frame->stale_frames_dropped = stale_frames_dropped;
 	frame->sensor_timestamp_us = camera_driver_buffer_timestamp_us(&buf);
 	switch (s_active_format.fmt.pix.pixelformat) {
 	case V4L2_PIX_FMT_YUV420:
@@ -904,8 +917,8 @@ esp_err_t camera_driver_capture(camera_driver_frame_t *frame)
 			 frame->height,
 			 (unsigned)frame->data_len,
 			 (unsigned)buf.index,
-			 (unsigned)frame->sequence,
-			 (unsigned)completed_frames_drained,
+			 (unsigned)buf.sequence,
+			 (unsigned)stale_frames_dropped,
 			 (unsigned long long)frame->sensor_timestamp_us);
 	}
 
@@ -932,6 +945,90 @@ void camera_driver_release(camera_driver_frame_t *frame)
 	xSemaphoreGive(s_lock);
 }
 
+static esp_err_t camera_driver_sensor_read(uint16_t reg, uint8_t *value)
+{
+	uint8_t address[] = {(uint8_t)(reg >> 8), (uint8_t)reg};
+	return i2c_master_transmit_receive(s_sensor_control, address, sizeof(address),
+	                                   value, 1, 20);
+}
+
+static esp_err_t camera_driver_verify_sensor(void)
+{
+	if (s_sensor_control == NULL) {
+		i2c_master_bus_handle_t bus = hardware_board_get_i2c_bus_handle();
+		ESP_RETURN_ON_FALSE(bus != NULL, ESP_ERR_INVALID_STATE, TAG,
+		                    "camera I2C bus unavailable");
+		i2c_device_config_t config = {
+			.dev_addr_length = I2C_ADDR_BIT_LEN_7,
+			.device_address = HARDWARE_BOARD_CAMERA_I2C_ADDR,
+			.scl_speed_hz = HARDWARE_BOARD_CAMERA_I2C_FREQ_HZ,
+		};
+		ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(bus, &config, &s_sensor_control),
+		                    TAG, "camera sensor I2C unavailable");
+	}
+
+	uint8_t high = 0, low = 0;
+	ESP_RETURN_ON_ERROR(camera_driver_sensor_read(0x3107, &high), TAG, "read SC2336 PID high");
+	ESP_RETURN_ON_ERROR(camera_driver_sensor_read(0x3108, &low), TAG, "read SC2336 PID low");
+	ESP_RETURN_ON_FALSE(high == 0xcb && low == 0x3a, ESP_ERR_INVALID_RESPONSE,
+	                    TAG, "unexpected SC2336 PID 0x%02x%02x", high, low);
+	ESP_LOGI(TAG, "SC2336 PID=0xcb3a; exposure uses the SC2336 ISP tuning");
+	return ESP_OK;
+}
+
+static esp_err_t camera_driver_log_quality_controls(int fd)
+{
+	struct v4l2_ext_control values[2] = {
+		{.id = V4L2_CID_EXPOSURE},
+		{.id = V4L2_CID_GAIN},
+	};
+	struct v4l2_ext_controls controls = {
+		.ctrl_class = V4L2_CTRL_CLASS_USER,
+		.count = 2,
+		.controls = values,
+	};
+	struct v4l2_query_ext_ctrl exposure = {.id = V4L2_CID_EXPOSURE};
+	struct v4l2_query_ext_ctrl gain = {.id = V4L2_CID_GAIN};
+	if (ioctl(fd, VIDIOC_G_EXT_CTRLS, &controls) != 0 ||
+	    ioctl(fd, VIDIOC_QUERY_EXT_CTRL, &exposure) != 0 ||
+	    ioctl(fd, VIDIOC_QUERY_EXT_CTRL, &gain) != 0) {
+		ESP_LOGE(TAG, "camera quality control read failed errno=%d", errno);
+		return ESP_FAIL;
+	}
+	if (values[0].value < exposure.minimum || values[0].value > exposure.maximum ||
+	    values[1].value < gain.minimum || values[1].value > gain.maximum ||
+	    gain.minimum < 0) {
+		ESP_LOGE(TAG, "camera quality controls outside queried limits");
+		return ESP_ERR_INVALID_RESPONSE;
+	}
+	struct v4l2_querymenu base = {.id = V4L2_CID_GAIN, .index = gain.minimum};
+	struct v4l2_querymenu current = {.id = V4L2_CID_GAIN, .index = values[1].value};
+	struct v4l2_querymenu maximum = {.id = V4L2_CID_GAIN, .index = gain.maximum};
+	if (ioctl(fd, VIDIOC_QUERYMENU, &base) != 0 ||
+	    ioctl(fd, VIDIOC_QUERYMENU, &current) != 0 ||
+	    ioctl(fd, VIDIOC_QUERYMENU, &maximum) != 0) {
+		ESP_LOGE(TAG, "camera quality gain menu read failed errno=%d", errno);
+		return ESP_FAIL;
+	}
+	/* SC2336 getters return driver-cached controls, not same-frame ISP stats. */
+	ESP_LOGI(TAG, "camera quality: cached=1 same_frame=0 exposure_lines=%ld limits=%lld/%lld gain_index=%ld limits=%lld/%lld gain_menu=%lld base=%lld maximum=%lld",
+	         (long)values[0].value, (long long)exposure.minimum,
+	         (long long)exposure.maximum, (long)values[1].value,
+	         (long long)gain.minimum, (long long)gain.maximum,
+	         (long long)current.value, (long long)base.value, (long long)maximum.value);
+	return ESP_OK;
+}
+
+esp_err_t camera_driver_log_quality(void)
+{
+	if (s_lock == NULL) return ESP_ERR_INVALID_STATE;
+	if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) return ESP_ERR_TIMEOUT;
+	esp_err_t ret = s_camera_initialized && s_fd >= 0
+	    ? camera_driver_log_quality_controls(s_fd) : ESP_ERR_INVALID_STATE;
+	xSemaphoreGive(s_lock);
+	return ret;
+}
+
 esp_err_t camera_driver_deinit(void)
 {
 	if (s_lock == NULL) {
@@ -943,9 +1040,7 @@ esp_err_t camera_driver_deinit(void)
 
 	s_client_count = 0;
 	camera_driver_cleanup();
-	if (!HARDWARE_BOARD_CAMERA_KEEP_POWERED) {
-		(void)hardware_board_set_camera_power(false);
-	}
+	if (!s_video_ready) (void)hardware_board_set_camera_power(false);
 	xSemaphoreGive(s_lock);
 	return ESP_OK;
 }

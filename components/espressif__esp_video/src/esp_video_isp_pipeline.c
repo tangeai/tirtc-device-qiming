@@ -15,6 +15,7 @@
 #include <sys/mman.h>
 #include <sys/param.h>
 #include <sys/errno.h>
+#include <sys/lock.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -26,6 +27,7 @@
 #include "esp_video_ioctl.h"
 #include "esp_video_isp_ioctl.h"
 #include "esp_video_device_internal.h"
+#include "esp_video_isp_pipeline.h"
 #include "esp_ipa.h"
 #include "esp_cam_sensor.h"
 
@@ -77,10 +79,22 @@ typedef struct esp_video_isp {
     StaticTask_t *task_ptr;
     StackType_t *task_stack_ptr;
 #endif
+
+    /**
+     * ISP statistics queue, this queue is used to store the ISP statistics data
+     */
+    QueueHandle_t isp_stats_queue;
+    /**
+     * Whether the ISP statistics queue is receiving data by the application layer
+     */
+    bool isp_stats_queue_is_receiving;
 } esp_video_isp_t;
 
 static const char *TAG = "ISP";
 static esp_video_isp_t *s_esp_video_isp;
+static _lock_t s_isp_lock;
+
+static esp_err_t isp_pipeline_set_statistics_window(esp_video_isp_t *isp, uint32_t target_windows, uint32_t left, uint32_t top, uint32_t width, uint32_t height);
 
 /**
  * @brief Print ISP statistics data
@@ -725,6 +739,12 @@ static void config_awb(esp_video_isp_t *isp, esp_ipa_metadata_t *metadata)
         awb.bg_max = range->bg_max;
         awb.bg_min = range->bg_min;
 
+        /**
+         * If the right and bottom of the window is 0, it means the window is not set, use the default window.
+         */
+        awb.windows[0].btm_right.x = 0;
+        awb.windows[0].btm_right.y = 0;
+
         controls.ctrl_class = V4L2_CID_USER_CLASS;
         controls.count      = 1;
         controls.controls   = control;
@@ -740,16 +760,11 @@ static void config_statistics_region(esp_video_isp_t *isp, esp_ipa_metadata_t *m
 {
     if (metadata->flags & IPA_METADATA_FLAGS_SR) {
         esp_ipa_region_t *sr = &metadata->stats_region;
-        struct v4l2_selection selection;
+        uint32_t target_windows = ESP_VIDEO_ISP_AF_STATS_WIN | ESP_VIDEO_ISP_AWB_STATS_WIN |
+                                  ESP_VIDEO_ISP_AE_STATS_WIN | ESP_VIDEO_ISP_HIST_STATS_WIN;
 
-        memset(&selection, 0, sizeof(selection));
-        selection.type = V4L2_BUF_TYPE_META_CAPTURE;
-        selection.r.left = sr->left;
-        selection.r.width = sr->width;
-        selection.r.top = sr->top;
-        selection.r.height = sr->height;
-        if (ioctl(isp->isp_fd, VIDIOC_S_SELECTION, &selection) != 0) {
-            ESP_LOGE(TAG, "failed to set selection");
+        if (isp_pipeline_set_statistics_window(isp, target_windows, sr->left, sr->top, sr->width, sr->height) != ESP_OK) {
+            ESP_LOGE(TAG, "failed to set statistics window");
         }
     }
 }
@@ -842,6 +857,62 @@ static void config_blc(esp_video_isp_t *isp, esp_ipa_metadata_t *metadata)
 }
 #endif
 
+#if ESP_VIDEO_ISP_DEVICE_DPC
+static void ipa_dpc_to_isp(const esp_ipa_dpc_t *ipa_dpc, esp_isp_dpc_dynamic_config_t *isp_dpc)
+{
+    memset(isp_dpc, 0, sizeof(*isp_dpc));
+    isp_dpc->method = (esp_isp_dpc_dynamic_method_t)ipa_dpc->method;
+
+    if (ipa_dpc->method == ESP_IPA_DPC_DYNAMIC_METHOD_1) {
+        isp_dpc->method_1.high_threshold = ipa_dpc->method_1.high_threshold;
+        isp_dpc->method_1.low_threshold = ipa_dpc->method_1.low_threshold;
+    } else {
+        uint32_t value;
+
+        value = ipa_dpc->method_2.first_stage_upper_ratio * ISP_DPC_RATIO_MAX;
+        if (value == 0) {
+            value = 1;
+        }
+        isp_dpc->method_2.first_stage_upper_ratio.val = MIN(value, ISP_DPC_RATIO_MAX);
+
+        value = ipa_dpc->method_2.first_stage_lower_ratio * ISP_DPC_RATIO_MAX;
+        if (value >= isp_dpc->method_2.first_stage_upper_ratio.val) {
+            value = isp_dpc->method_2.first_stage_upper_ratio.val - 1;
+        }
+        isp_dpc->method_2.first_stage_lower_ratio.val = MIN(value, ISP_DPC_RATIO_MAX);
+
+        value = ipa_dpc->method_2.bright_deviation_factor * ISP_DPC_DEVIATION_FACTOR_MAX;
+        isp_dpc->method_2.bright_deviation_factor.val = MIN(value, ISP_DPC_DEVIATION_FACTOR_MAX);
+
+        value = ipa_dpc->method_2.dark_deviation_factor * ISP_DPC_DEVIATION_FACTOR_MAX;
+        isp_dpc->method_2.dark_deviation_factor.val = MIN(value, ISP_DPC_DEVIATION_FACTOR_MAX);
+    }
+}
+
+static void config_dpc(esp_video_isp_t *isp, esp_ipa_metadata_t *metadata)
+{
+    if (metadata->flags & IPA_METADATA_FLAGS_DPC) {
+        struct v4l2_ext_controls controls;
+        struct v4l2_ext_control control[1];
+        esp_video_isp_dpc_dynamic_t dpc;
+
+        memset(&dpc, 0, sizeof(dpc));
+        dpc.enable = true;
+        ipa_dpc_to_isp(&metadata->dpc, &dpc.dynamic);
+
+        controls.ctrl_class = V4L2_CID_USER_CLASS;
+        controls.count      = 1;
+        controls.controls   = control;
+        control[0].id       = V4L2_CID_USER_ESP_ISP_DPC_DYNAMIC;
+        control[0].size     = sizeof(esp_video_isp_dpc_dynamic_t);
+        control[0].p_u8     = (uint8_t *)&dpc;
+        if (ioctl(isp->isp_fd, VIDIOC_S_EXT_CTRLS, &controls) != 0) {
+            ESP_LOGE(TAG, "failed to set DPC");
+        }
+    }
+}
+#endif
+
 static void config_isp_and_camera(esp_video_isp_t *isp, esp_ipa_metadata_t *metadata)
 {
     config_statistics_region(isp, metadata);
@@ -863,6 +934,9 @@ static void config_isp_and_camera(esp_video_isp_t *isp, esp_ipa_metadata_t *meta
     config_af(isp, metadata);
 #if ESP_VIDEO_ISP_DEVICE_BLC
     config_blc(isp, metadata);
+#endif
+#if ESP_VIDEO_ISP_DEVICE_DPC
+    config_dpc(isp, metadata);
 #endif
     config_sensor_ae_target_level(isp, metadata);
     config_exposure_and_gain(isp, metadata);
@@ -1005,6 +1079,17 @@ static void get_sensor_state(esp_video_isp_t *isp, int index)
     }
 }
 
+static void isp_stats_to_queue(esp_video_isp_t *isp, esp_video_isp_stats_t *stats)
+{
+    _lock_acquire(&s_isp_lock);
+    if (isp->isp_stats_queue) {
+        if (xQueueSend(isp->isp_stats_queue, stats, 0) != pdPASS) {
+            ESP_LOGD(TAG, "failed to send ISP statistics to queue");
+        }
+    }
+    _lock_release(&s_isp_lock);
+}
+
 static void isp_task(void *p)
 {
     esp_err_t ret;
@@ -1022,20 +1107,24 @@ static void isp_task(void *p)
 
         get_sensor_state(isp, buf.index);
 
+        isp_stats_to_queue(isp, isp->isp_stats[buf.index]);
+
         isp_stats_to_ipa_stats(isp->isp_stats[buf.index], &isp->ipa_stats);
         if (ioctl(isp->isp_fd, VIDIOC_QBUF, &buf) != 0) {
             ESP_LOGE(TAG, "failed to queue video frame");
         }
         print_stats_info(&isp->ipa_stats);
 
+        _lock_acquire(&s_isp_lock);
         isp->metadata.flags = 0;
         ret = esp_ipa_pipeline_process(isp->ipa_pipeline, &isp->ipa_stats, &isp->sensor, &isp->metadata);
+        if (ret == ESP_OK) {
+            config_isp_and_camera(isp, &isp->metadata);
+        }
+        _lock_release(&s_isp_lock);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "failed to process image algorithm");
-            continue;
         }
-
-        config_isp_and_camera(isp, &isp->metadata);
     }
 
     vTaskDelete(NULL);
@@ -1354,18 +1443,30 @@ esp_err_t esp_video_isp_pipeline_init(const esp_video_isp_config_t *config)
     esp_video_isp_t *isp;
     esp_ipa_metadata_t metadata;
 
-#if LOG_LOCAL_LEVEL >= ESP_LOG_DEBUG
-    esp_log_level_set(TAG, ESP_LOG_DEBUG);
-#endif
-
     if (!config || !config->isp_dev || !config->cam_dev ||
             !config->ipa_config) {
         ESP_LOGE(TAG, "failed to check ISP configuration");
         return ESP_ERR_INVALID_ARG;
     }
 
+    _lock_acquire(&s_isp_lock);
+
+    if (s_esp_video_isp) {
+        ESP_LOGE(TAG, "ISP controller is already initialized");
+        _lock_release(&s_isp_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+#if LOG_LOCAL_LEVEL >= ESP_LOG_DEBUG
+    esp_log_level_set(TAG, ESP_LOG_DEBUG);
+#endif
+
     isp = calloc(1, sizeof(esp_video_isp_t));
-    ESP_RETURN_ON_FALSE(isp, ESP_ERR_NO_MEM, TAG, "failed to malloc isp");
+    if (!isp) {
+        ESP_LOGE(TAG, "failed to malloc isp");
+        _lock_release(&s_isp_lock);
+        return ESP_ERR_NO_MEM;
+    }
 
     ESP_GOTO_ON_ERROR(esp_ipa_pipeline_create(config->ipa_config, &isp->ipa_pipeline),
                       fail_0, TAG, "failed to create IPA pipeline");
@@ -1403,6 +1504,7 @@ esp_err_t esp_video_isp_pipeline_init(const esp_video_isp_config_t *config)
 #endif
 
     s_esp_video_isp = isp;
+    _lock_release(&s_isp_lock);
     return ESP_OK;
 
 #if CONFIG_ISP_PIPELINE_CONTROLLER_TASK_STACK_USE_PSRAM
@@ -1419,6 +1521,7 @@ fail_1:
     esp_ipa_pipeline_destroy(isp->ipa_pipeline);
 fail_0:
     free(isp);
+    _lock_release(&s_isp_lock);
     return ret;
 }
 
@@ -1434,13 +1537,17 @@ fail_0:
 esp_err_t esp_video_isp_pipeline_deinit(void)
 {
     int ret;
-    esp_video_isp_t *isp = s_esp_video_isp;
     int type = V4L2_BUF_TYPE_META_CAPTURE;
 
-    ESP_RETURN_ON_FALSE(s_esp_video_isp, ESP_FAIL, TAG, "ISP controller is not initialized");
+    _lock_acquire(&s_isp_lock);
+
+    ESP_GOTO_ON_FALSE(s_esp_video_isp, ESP_FAIL, fail_0, TAG, "ISP controller is not initialized");
+    ESP_GOTO_ON_FALSE(s_esp_video_isp->isp_stats_queue_is_receiving == false, ESP_FAIL, fail_0, TAG, "ISP statistics queue is receiving");
+
+    esp_video_isp_t *isp = s_esp_video_isp;
 
     ret = ioctl(isp->isp_fd, VIDIOC_STREAMOFF, &type);
-    ESP_RETURN_ON_FALSE(ret == 0, ESP_FAIL, TAG, "failed to stop stream");
+    ESP_GOTO_ON_FALSE(ret == 0, ESP_FAIL, fail_0, TAG, "failed to stop stream");
     vTaskDelay(ISP_METADATA_BUFFER_COUNT * 50 / portTICK_PERIOD_MS);
 
     vTaskDelete(isp->task_handler);
@@ -1450,13 +1557,24 @@ esp_err_t esp_video_isp_pipeline_deinit(void)
     heap_caps_free(isp->task_stack_ptr);
 #endif
 
-    ESP_RETURN_ON_FALSE(close(isp->isp_fd) == 0, ESP_FAIL, TAG, "failed to close ISP");
-    ESP_RETURN_ON_FALSE(close(isp->cam_fd) == 0, ESP_FAIL, TAG, "failed to close camera sensor");
-    ESP_RETURN_ON_ERROR(esp_ipa_pipeline_destroy(isp->ipa_pipeline), TAG, "failed to destroy pipeline");
+    ESP_GOTO_ON_FALSE(close(isp->isp_fd) == 0, ESP_FAIL, fail_0, TAG, "failed to close ISP");
+    ESP_GOTO_ON_FALSE(close(isp->cam_fd) == 0, ESP_FAIL, fail_0, TAG, "failed to close camera sensor");
+    ESP_GOTO_ON_ERROR(esp_ipa_pipeline_destroy(isp->ipa_pipeline), fail_0, TAG, "failed to destroy pipeline");
+
+    if (isp->isp_stats_queue) {
+        vQueueDelete(isp->isp_stats_queue);
+        isp->isp_stats_queue = NULL;
+    }
+
     free(isp);
     s_esp_video_isp = NULL;
 
+    _lock_release(&s_isp_lock);
     return ESP_OK;
+
+fail_0:
+    _lock_release(&s_isp_lock);
+    return ESP_FAIL;
 }
 
 /**
@@ -1468,5 +1586,575 @@ esp_err_t esp_video_isp_pipeline_deinit(void)
  */
 bool esp_video_isp_pipeline_is_initialized(void)
 {
-    return s_esp_video_isp != NULL;
+    _lock_acquire(&s_isp_lock);
+    bool is_initialized = s_esp_video_isp != NULL;
+    _lock_release(&s_isp_lock);
+
+    return is_initialized;
+}
+
+/**
+ * @brief Set AGC status.
+ *
+ * @param status AGC status
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - Others if failed
+ */
+esp_err_t esp_video_isp_pipeline_set_agc_status(esp_video_isp_pipeline_agc_status_t status)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        int value = status;
+
+        ret = esp_ipa_pipeline_ioctl(s_esp_video_isp->ipa_pipeline, ESP_IPA_AGC_S_STATUS, &value);
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+/**
+ * @brief Get AGC status.
+ *
+ * @param status Pointer to store AGC status
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - Others if failed
+ */
+esp_err_t esp_video_isp_pipeline_get_agc_status(esp_video_isp_pipeline_agc_status_t *status)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+
+    ESP_RETURN_ON_FALSE(status, ESP_ERR_INVALID_ARG, TAG, "status is NULL");
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        int value;
+
+        ret = esp_ipa_pipeline_ioctl(s_esp_video_isp->ipa_pipeline, ESP_IPA_AGC_G_STATUS, &value);
+        if (ret == ESP_OK) {
+            *status = value;
+        }
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+static void isp_pipeline_fill_windows(isp_window_t *windows, int num, uint32_t left, uint32_t top, uint32_t width, uint32_t height)
+{
+    for (int i = 0; i < num; i++) {
+        windows[i].top_left.x = left;
+        windows[i].top_left.y = top;
+        windows[i].btm_right.x = left + width - 1;
+        windows[i].btm_right.y = top + height - 1;
+    }
+}
+
+static esp_err_t isp_pipeline_set_statistics_window(esp_video_isp_t *isp, uint32_t target_windows, uint32_t left, uint32_t top, uint32_t width, uint32_t height)
+{
+    struct v4l2_ext_controls controls = {
+        .ctrl_class = V4L2_CID_USER_CLASS,
+        .count = 1,
+    };
+    struct v4l2_ext_control control;
+    int fd = isp->isp_fd;
+
+    controls.controls = &control;
+
+    if (target_windows & ESP_VIDEO_ISP_AF_STATS_WIN) {
+        esp_video_isp_af_t af;
+
+        control.id = V4L2_CID_USER_ESP_ISP_AF;
+        control.p_u8 = (uint8_t *)&af;
+        ESP_RETURN_ON_FALSE(ioctl(fd, VIDIOC_G_EXT_CTRLS, &controls) == 0, ESP_FAIL, TAG, "failed to get AF statistics window");
+
+        isp_pipeline_fill_windows(af.windows, ISP_AF_WINDOW_NUM, left, top, width, height);
+        ESP_RETURN_ON_FALSE(ioctl(fd, VIDIOC_S_EXT_CTRLS, &controls) == 0, ESP_FAIL, TAG, "failed to set AF statistics window");
+    }
+
+    if (target_windows & ESP_VIDEO_ISP_AE_STATS_WIN) {
+        esp_video_isp_ae_t ae;
+
+        control.id = V4L2_CID_USER_ESP_ISP_AE;
+        control.p_u8 = (uint8_t *)&ae;
+        ESP_RETURN_ON_FALSE(ioctl(fd, VIDIOC_G_EXT_CTRLS, &controls) == 0, ESP_FAIL, TAG, "failed to get AE statistics window");
+
+        isp_pipeline_fill_windows(ae.windows, ISP_AE_WINDOW_NUM, left, top, width, height);
+        ESP_RETURN_ON_FALSE(ioctl(fd, VIDIOC_S_EXT_CTRLS, &controls) == 0, ESP_FAIL, TAG, "failed to set AE statistics window");
+    }
+
+    if (target_windows & ESP_VIDEO_ISP_HIST_STATS_WIN) {
+        esp_video_isp_hist_t hist;
+
+        control.id = V4L2_CID_USER_ESP_ISP_HIST;
+        control.p_u8 = (uint8_t *)&hist;
+        ESP_RETURN_ON_FALSE(ioctl(fd, VIDIOC_G_EXT_CTRLS, &controls) == 0, ESP_FAIL, TAG, "failed to get HIST statistics window");
+
+        isp_pipeline_fill_windows(hist.windows, ISP_HIST_WINDOW_NUM, left, top, width, height);
+        ESP_RETURN_ON_FALSE(ioctl(fd, VIDIOC_S_EXT_CTRLS, &controls) == 0, ESP_FAIL, TAG, "failed to set HIST statistics window");
+    }
+
+    if (target_windows & ESP_VIDEO_ISP_AWB_STATS_WIN) {
+        esp_video_isp_awb_t awb;
+
+        control.id = V4L2_CID_USER_ESP_ISP_AWB;
+        control.p_u8 = (uint8_t *)&awb;
+        ESP_RETURN_ON_FALSE(ioctl(fd, VIDIOC_G_EXT_CTRLS, &controls) == 0, ESP_FAIL, TAG, "failed to get AWB statistics window");
+
+        isp_pipeline_fill_windows(awb.windows, ISP_AWB_WINDOW_NUM, left, top, width, height);
+        ESP_RETURN_ON_FALSE(ioctl(fd, VIDIOC_S_EXT_CTRLS, &controls) == 0, ESP_FAIL, TAG, "failed to set AWB statistics window");
+    }
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Create a queue to dump ISP statistics.
+ *
+ * @note The queue will be created in the internal memory of the ISP controller.
+ * @note This function will decrease the ISP pipeline performance, so if not necessary, please don't call this function.
+ *       Please call esp_video_isp_pipeline_stop_dump_stats() to stop dumping ISP statistics.
+ *
+ * @param queue_size Queue size
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - Others if failed
+ */
+esp_err_t esp_video_isp_pipeline_start_dump_stats(uint32_t queue_size)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+
+    ESP_RETURN_ON_FALSE(queue_size > 0, ESP_ERR_INVALID_ARG, TAG, "queue_size is 0");
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        if (s_esp_video_isp->isp_stats_queue) {
+            ESP_LOGD(TAG, "ISP statistics queue is already initialized");
+            ret = ESP_ERR_INVALID_STATE;
+        } else {
+            s_esp_video_isp->isp_stats_queue = xQueueCreate(queue_size, sizeof(esp_video_isp_stats_t));
+            if (!s_esp_video_isp->isp_stats_queue) {
+                ESP_LOGD(TAG, "failed to create ISP statistics queue");
+                ret = ESP_ERR_NO_MEM;
+            } else {
+                s_esp_video_isp->isp_stats_queue_is_receiving = false;
+                ret = ESP_OK;
+            }
+        }
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+/**
+ * @brief Stop dumping ISP statistics to a queue.
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - Others if failed
+ */
+esp_err_t esp_video_isp_pipeline_stop_dump_stats(void)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        if (s_esp_video_isp->isp_stats_queue_is_receiving) {
+            ESP_LOGD(TAG, "ISP statistics queue is receiving");
+            ret = ESP_ERR_INVALID_STATE;
+        } else {
+            if (!s_esp_video_isp->isp_stats_queue) {
+                ESP_LOGD(TAG, "ISP statistics queue is not initialized");
+                ret = ESP_ERR_INVALID_STATE;
+            } else {
+                vQueueDelete(s_esp_video_isp->isp_stats_queue);
+                s_esp_video_isp->isp_stats_queue = NULL;
+                ret = ESP_OK;
+            }
+        }
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+/**
+ * @brief Dump ISP statistics to a queue.
+ *
+ * @param stats Pointer to store ISP statistics
+ * @param timeout_ms Timeout in milliseconds
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - Others if failed
+ */
+esp_err_t esp_video_isp_pipeline_dump_stats(esp_video_isp_stats_t *stats, uint32_t timeout_ms)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+
+    ESP_RETURN_ON_FALSE(stats, ESP_ERR_INVALID_ARG, TAG, "stats is NULL");
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        if (!s_esp_video_isp->isp_stats_queue) {
+            ESP_LOGD(TAG, "ISP statistics queue is not initialized");
+            ret = ESP_ERR_INVALID_STATE;
+        } else {
+            if (s_esp_video_isp->isp_stats_queue_is_receiving) {
+                ESP_LOGD(TAG, "ISP statistics queue is receiving");
+                ret = ESP_ERR_INVALID_STATE;
+            } else {
+                /**
+                 * Release the lock before receiving the statistics data to avoid blocking the ISP pipeline task
+                 */
+                s_esp_video_isp->isp_stats_queue_is_receiving = true;
+                _lock_release(&s_isp_lock);
+                if (xQueueReceive(s_esp_video_isp->isp_stats_queue, stats, pdMS_TO_TICKS(timeout_ms)) == pdTRUE) {
+                    ret = ESP_OK;
+                } else {
+                    ret = ESP_ERR_TIMEOUT;
+                }
+                _lock_acquire(&s_isp_lock);
+                s_esp_video_isp->isp_stats_queue_is_receiving = false;
+            }
+        }
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+/**
+ * @brief Set statistics window.
+ *
+ * @param target_windows Target windows masks, which can be a combination of the following:
+ *      - ESP_VIDEO_ISP_AF_STATS_WIN
+ *      - ESP_VIDEO_ISP_AWB_STATS_WIN
+ *      - ESP_VIDEO_ISP_AE_STATS_WIN
+ *      - ESP_VIDEO_ISP_HIST_STATS_WIN
+ * @param left Left-up X coordinate of the window
+ * @param top Left-up Y coordinate of the window
+ * @param width Window width
+ * @param height Window height
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - Others if failed
+ */
+esp_err_t esp_video_isp_pipeline_set_statistics_window(uint32_t target_windows, uint32_t left, uint32_t top, uint32_t width, uint32_t height)
+{
+    esp_err_t ret = ESP_ERR_INVALID_ARG;
+
+    const uint32_t valid_windows = ESP_VIDEO_ISP_AF_STATS_WIN |
+                                   ESP_VIDEO_ISP_AWB_STATS_WIN |
+                                   ESP_VIDEO_ISP_AE_STATS_WIN |
+                                   ESP_VIDEO_ISP_HIST_STATS_WIN;
+
+    ESP_RETURN_ON_FALSE(target_windows != 0 && !(target_windows & ~valid_windows),
+                        ESP_ERR_INVALID_ARG, TAG, "invalid target_windows");
+    ESP_RETURN_ON_FALSE(width > 0 && height > 0, ESP_ERR_INVALID_ARG, TAG, "invalid window size");
+
+    _lock_acquire(&s_isp_lock);
+
+    if (s_esp_video_isp) {
+        ret = isp_pipeline_set_statistics_window(s_esp_video_isp, target_windows, left, top, width, height);
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+        ret = ESP_ERR_INVALID_STATE;
+    }
+
+    _lock_release(&s_isp_lock);
+    return ret;
+}
+
+/**
+ * @brief Validate exposure against sensor range and align it to the exposure step.
+ *
+ * @param isp         ISP pipeline object
+ * @param exposure_us Input exposure in microseconds; stores aligned value on success
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - ESP_ERR_INVALID_ARG if exposure is out of range
+ *      - Others if failed
+ */
+static esp_err_t isp_check_and_align_exposure(esp_video_isp_t *isp, uint32_t *exposure_us)
+{
+    uint32_t min_us = isp->sensor.min_exposure;
+    uint32_t max_us = isp->sensor.max_exposure;
+    uint32_t step_us = isp->sensor.step_exposure;
+    uint32_t aligned_us = *exposure_us;
+
+    ESP_RETURN_ON_FALSE(isp->sensor_attr.exposure, ESP_ERR_NOT_SUPPORTED, TAG, "exposure is not supported");
+    ESP_RETURN_ON_FALSE(aligned_us >= min_us && aligned_us <= max_us, ESP_ERR_INVALID_ARG, TAG,
+                        "exposure %" PRIu32 " us out of range [%" PRIu32 ", %" PRIu32 "], step %" PRIu32,
+                        aligned_us, min_us, max_us, step_us);
+
+    if (step_us > 0) {
+        aligned_us = aligned_us / step_us * step_us;
+        ESP_RETURN_ON_FALSE(aligned_us >= min_us && aligned_us <= max_us, ESP_ERR_INVALID_ARG, TAG,
+                            "aligned exposure %" PRIu32 " us out of range [%" PRIu32 ", %" PRIu32 "], step %" PRIu32,
+                            aligned_us, min_us, max_us, step_us);
+    }
+
+    *exposure_us = aligned_us;
+    return ESP_OK;
+}
+
+/**
+ * @brief Set AGC maximum exposure time.
+ *
+ * @param exposure_us Maximum exposure time in microseconds
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - Others if failed
+ */
+esp_err_t esp_video_isp_pipeline_set_agc_max_exposure(uint32_t exposure_us)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        uint32_t value = exposure_us;
+
+        ret = isp_check_and_align_exposure(s_esp_video_isp, &value);
+        if (ret == ESP_OK) {
+            ret = esp_ipa_pipeline_ioctl(s_esp_video_isp->ipa_pipeline, ESP_IPA_AGC_S_MAX_EXPOSURE, &value);
+            if (ret == ESP_OK) {
+                ESP_LOGD(TAG, "AGC maximum exposure: %" PRIu32 " us", value);
+            }
+        }
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+/**
+ * @brief Get AGC maximum exposure time.
+ *
+ * @param exposure_us Pointer to store maximum exposure time in microseconds
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - Others if failed
+ */
+esp_err_t esp_video_isp_pipeline_get_agc_max_exposure(uint32_t *exposure_us)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+
+    ESP_RETURN_ON_FALSE(exposure_us, ESP_ERR_INVALID_ARG, TAG, "exposure_us is NULL");
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        ret = esp_ipa_pipeline_ioctl(s_esp_video_isp->ipa_pipeline, ESP_IPA_AGC_G_MAX_EXPOSURE, exposure_us);
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+/**
+ * @brief Set AGC minimum exposure time.
+ *
+ * @param exposure_us Minimum exposure time in microseconds
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - Others if failed
+ */
+esp_err_t esp_video_isp_pipeline_set_agc_min_exposure(uint32_t exposure_us)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        uint32_t value = exposure_us;
+
+        ret = isp_check_and_align_exposure(s_esp_video_isp, &value);
+        if (ret == ESP_OK) {
+            ret = esp_ipa_pipeline_ioctl(s_esp_video_isp->ipa_pipeline, ESP_IPA_AGC_S_MIN_EXPOSURE, &value);
+            if (ret == ESP_OK) {
+                ESP_LOGD(TAG, "AGC minimum exposure: %" PRIu32 " us", value);
+            }
+        }
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+/**
+ * @brief Get AGC minimum exposure time.
+ *
+ * @param exposure_us Pointer to store minimum exposure time in microseconds
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - Others if failed
+ */
+esp_err_t esp_video_isp_pipeline_get_agc_min_exposure(uint32_t *exposure_us)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+
+    ESP_RETURN_ON_FALSE(exposure_us, ESP_ERR_INVALID_ARG, TAG, "exposure_us is NULL");
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp) {
+        ret = esp_ipa_pipeline_ioctl(s_esp_video_isp->ipa_pipeline, ESP_IPA_AGC_G_MIN_EXPOSURE, exposure_us);
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+/**
+ * @brief Get int32_t type IPA environment variable.
+ *
+ * @param name  Environment variable name
+ * @param val   Pointer to store int32_t type environment variable
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - ESP_ERR_NOT_FOUND if the variable does not exist
+ *      - Others if failed
+ */
+esp_err_t esp_video_isp_pipeline_get_env_int32(const char *name, int32_t *val)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+
+    ESP_RETURN_ON_FALSE(name && val, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp && s_esp_video_isp->ipa_pipeline &&
+            s_esp_video_isp->ipa_pipeline->ipa_array) {
+        esp_ipa_t *ipa = s_esp_video_isp->ipa_pipeline->ipa_array[0];
+
+        if (!esp_ipa_has_var(ipa, name)) {
+            ret = ESP_ERR_NOT_FOUND;
+        } else {
+            *val = esp_ipa_get_int32(ipa, name);
+            ret = ESP_OK;
+        }
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+/**
+ * @brief Get float type IPA environment variable.
+ *
+ * @param name  Environment variable name
+ * @param val   Pointer to store float type environment variable
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - ESP_ERR_NOT_FOUND if the variable does not exist
+ *      - Others if failed
+ */
+esp_err_t esp_video_isp_pipeline_get_env_float(const char *name, float *val)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+
+    ESP_RETURN_ON_FALSE(name && val, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp && s_esp_video_isp->ipa_pipeline &&
+            s_esp_video_isp->ipa_pipeline->ipa_array) {
+        esp_ipa_t *ipa = s_esp_video_isp->ipa_pipeline->ipa_array[0];
+
+        if (!esp_ipa_has_var(ipa, name)) {
+            ret = ESP_ERR_NOT_FOUND;
+        } else {
+            *val = esp_ipa_get_float(ipa, name);
+            ret = ESP_OK;
+        }
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
+}
+
+/**
+ * @brief Enumerate IPA configurations of the same sensor.
+ *
+ * @param sensor_name Sensor name
+ * @param index       Zero-based index among configurations of this sensor
+ *
+ * @return IPA configuration pointer if found, or NULL if sensor is not supported or index is out of range
+ */
+const esp_ipa_config_t *esp_video_isp_pipeline_enum_ipa_configs(const char *sensor_name, int index)
+{
+    return esp_ipa_pipeline_enum_configs(sensor_name, index);
+}
+
+/**
+ * @brief Rebuild IPA modules from a new configuration and apply init metadata to ISP/camera.
+ *
+ * @note This function serializes with the ISP pipeline task. `config->nums` and
+ *       `config->names[i]` must match the modules loaded at create time.
+ * @note ESP_OK only means the JSON configuration was switched and parameters were
+ *       issued to hardware. Whether the hardware is correctly programmed with the
+ *       new parameters must be confirmed from runtime logs.
+ *
+ * @param config New IPA configuration
+ *
+ * @return
+ *      - ESP_OK if JSON was switched and parameters were issued to hardware
+ *      - Others if failed
+ */
+esp_err_t esp_video_isp_pipeline_set_ipa_config(const esp_ipa_config_t *config)
+{
+    esp_err_t ret = ESP_ERR_INVALID_STATE;
+    esp_ipa_metadata_t metadata = {0};
+
+    ESP_RETURN_ON_FALSE(config, ESP_ERR_INVALID_ARG, TAG, "config is NULL");
+
+    _lock_acquire(&s_isp_lock);
+    if (s_esp_video_isp && s_esp_video_isp->ipa_pipeline) {
+        ret = esp_ipa_pipeline_set_config(s_esp_video_isp->ipa_pipeline, config,
+                                          &s_esp_video_isp->sensor, &metadata);
+        if (ret == ESP_OK) {
+            config_isp_and_camera(s_esp_video_isp, &metadata);
+            ESP_LOGD(TAG, "switched IPA config description=%s",
+                     config->description ? config->description : "");
+        }
+    } else {
+        ESP_LOGD(TAG, "ISP controller is not initialized");
+    }
+    _lock_release(&s_isp_lock);
+
+    return ret;
 }

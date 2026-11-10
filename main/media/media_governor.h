@@ -6,14 +6,6 @@
 
 #include "esp_err.h"
 
-/*
- * Compact H264 output is an encoder resource fallback, not a sensor mode.
- * The SC2336 capture surface stays on the board-selected native mode; PPA
- * performs any crop/scale required by RTC consumers.
- */
-#define MEDIA_GOVERNOR_COMPACT_VIDEO_WIDTH  640U
-#define MEDIA_GOVERNOR_COMPACT_VIDEO_HEIGHT 480U
-
 typedef enum {
     MEDIA_GOVERNOR_PROFILE_IDLE = 0,
     MEDIA_GOVERNOR_PROFILE_QR_SCAN,

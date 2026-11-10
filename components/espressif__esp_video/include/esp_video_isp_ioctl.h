@@ -10,11 +10,16 @@
 #include <stdbool.h>
 #include "sdkconfig.h"
 #include "driver/isp.h"
+#include "esp_video_caps.h"
 #include <linux/v4l2-controls.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#define ISP_AE_WINDOW_NUM                    1   /*!< Auto exposure window number */
+#define ISP_AWB_WINDOW_NUM                   1   /*!< Auto white balance window number */
+#define ISP_HIST_WINDOW_NUM                  1   /*!< Histogram window number */
 
 /**
  * @brief The base for the ESP32XX SoCes driver controls.
@@ -40,6 +45,24 @@ extern "C" {
 #define V4L2_CID_USER_ESP_ISP_AWB           (V4L2_CID_USER_ESP_ISP_BASE + 0x0008)   /*!< Auto white balance statistics V4L2 controller ID */
 #define V4L2_CID_USER_ESP_ISP_BLC           (V4L2_CID_USER_ESP_ISP_BASE + 0x0009)   /*!< Black level correction V4L2 controller ID */
 #define V4L2_CID_USER_ESP_ISP_GAMMA_EXT     (V4L2_CID_USER_ESP_ISP_BASE + 0x000a)   /*!< GAMMA extension V4L2 controller ID */
+
+/**
+ * @brief Set ISP bypass mode. When both the ISP input and output formats are RAW8, bypass mode is enabled by default.
+ *        In bypass mode, the ISP does not process the image; the image data is transferred directly to the output.
+ *        As a result, the original image data is not processed by any ISP modules in the raw regions.
+ *
+ * @note This command is for the ISP video device.
+ *
+ * @note This command only has an effect when both ISP input and output formats are set to RAW8.
+ *
+ * @param bypass: true to bypass the ISP, false to enable ISP processing.
+ */
+#define V4L2_CID_USER_ESP_ISP_RAW_BYPASS     (V4L2_CID_USER_ESP_ISP_BASE + 0x000b)
+
+#define V4L2_CID_USER_ESP_ISP_AE             (V4L2_CID_USER_ESP_ISP_BASE + 0x000c)   /*!< Auto exposure V4L2 controller ID */
+#define V4L2_CID_USER_ESP_ISP_HIST           (V4L2_CID_USER_ESP_ISP_BASE + 0x000d)   /*!< Histogram V4L2 controller ID */
+
+#define V4L2_CID_USER_ESP_ISP_DPC_DYNAMIC    (V4L2_CID_USER_ESP_ISP_BASE + 0x000e)   /*!< DPC dynamic configuration V4L2 controller ID */
 
 /**
  * @brief ESP32XXX ISP image statistics output, data type is "esp_ipa_stats_t"
@@ -232,6 +255,13 @@ typedef struct esp_video_isp_awb {
 
     float bg_max;                   /*!< Maximum blue/green ratio */
     float bg_min;                   /*!< Minimum blue/green ratio */
+
+    /**
+     * AWB statistics windows
+     *
+     * If the right and bottom of the window is 0, it means the window is not set, use the default window.
+     */
+    isp_window_t windows[ISP_AWB_WINDOW_NUM];
 } esp_video_isp_awb_t;
 
 /**
@@ -246,6 +276,38 @@ typedef struct esp_video_isp_blc {
     uint16_t bottom_left_offset;    /*!< Bottom left channel offset value */
     uint16_t bottom_right_offset;   /*!< Bottom right channel offset value */
 } esp_video_isp_blc_t;
+
+/**
+ * @brief Auto exposure statistics configuration.
+ */
+typedef struct esp_video_isp_ae {
+    bool enable;                                /*!< true: enable AE statistics, false: disable AE statistics */
+
+    isp_window_t windows[ISP_AE_WINDOW_NUM];    /*!< AE statistics windows */
+} esp_video_isp_ae_t;
+
+/**
+ * @brief Histogram statistics configuration.
+ */
+typedef struct esp_video_isp_hist {
+    bool enable;                                /*!< true: enable HIST statistics, false: disable HIST statistics */
+
+    isp_window_t windows[ISP_HIST_WINDOW_NUM];  /*!< HIST statistics windows */
+} esp_video_isp_hist_t;
+
+#if ESP_VIDEO_ISP_DEVICE_DPC
+/**
+ * @brief DPC configuration.
+ *
+ * @note Maps to esp_isp_dpc_dynamic_configure() / esp_isp_dpc_configure() / esp_isp_dpc_enable().
+ *       Static DPC LUT is not covered by this command.
+ */
+typedef struct esp_video_isp_dpc_dynamic {
+    bool enable;                                /*!< true: enable DPC, false: disable DPC */
+
+    esp_isp_dpc_dynamic_config_t dynamic;       /*!< DPC dynamic configuration */
+} esp_video_isp_dpc_dynamic_t;
+#endif /* ESP_VIDEO_ISP_DEVICE_DPC */
 
 /**
  * @brief ISP statistics.

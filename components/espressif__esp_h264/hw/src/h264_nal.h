@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "esp_h264_types.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,7 +26,8 @@ extern "C" {
  * @return
  *       - The bit length of SPS
  */
-uint16_t esp_h264_enc_set_sps(uint8_t *buffer, uint16_t len, uint16_t height, uint16_t width, uint8_t fps);
+uint16_t esp_h264_enc_set_sps(uint8_t *buffer, uint16_t len, uint16_t height, uint16_t width, uint8_t fps,
+                              const esp_h264_enc_vui_color_t *color);
 
 /**
  * @brief  Configure picture parameter set (PPS)

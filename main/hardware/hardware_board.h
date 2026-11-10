@@ -85,18 +85,7 @@ typedef struct {
 } hardware_camera_config_t;
 
 typedef struct {
-	bool display;
-	bool touch;
-	bool audio_input;
-	bool audio_output;
-	bool camera;
-	bool sdcard;
-} hardware_board_capabilities_t;
-
-typedef struct {
 	const char *type;
-	gpio_num_t boot_button_gpio;
-	hardware_board_capabilities_t capabilities;
 	hardware_i2c_config_t i2c;
 	hardware_display_config_t display;
 	hardware_audio_config_t audio;
@@ -108,20 +97,12 @@ const hardware_i2c_config_t *hardware_board_get_i2c_config(void);
 const hardware_display_config_t *hardware_board_get_display_config(void);
 const hardware_audio_config_t *hardware_board_get_audio_config(void);
 const hardware_camera_config_t *hardware_board_get_camera_config(void);
-const hardware_board_capabilities_t *hardware_board_get_capabilities(void);
-gpio_num_t hardware_board_get_boot_button_gpio(void);
-bool hardware_board_has_display(void);
-bool hardware_board_has_touch(void);
-bool hardware_board_has_audio_input(void);
-bool hardware_board_has_audio_output(void);
-bool hardware_board_has_camera(void);
 
 esp_err_t hardware_board_init(void);
-esp_err_t hardware_board_probe_optional_capabilities(void);
 esp_err_t hardware_board_init_i2c(void);
 esp_err_t hardware_board_init_io_expander(void);
 i2c_master_bus_handle_t hardware_board_get_i2c_bus_handle(void);
 esp_err_t hardware_board_set_lcd_chip_select(bool active);
 esp_err_t hardware_board_set_audio_power(bool enable);
 esp_err_t hardware_board_set_camera_power(bool enable);
-esp_err_t hardware_board_prepare_camera(void);
+esp_err_t hardware_board_log_i2c_diagnostics(void);

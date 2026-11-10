@@ -1,7 +1,3 @@
-* text=auto eol=lf
-*.bat text eol=crlf
-*.cmd text eol=crlf
-
 *.a binary
 *.bin binary
 *.zip binary
@@ -16,14 +12,22 @@
 components/tirtc_sdk/include/** -text -whitespace
 components/tirtc_sdk/VERSION.md -text -whitespace
 components/tirtc_sdk/SHA256SUMS.txt -text -whitespace
+components/tirtc_sdk/BUILD_EVIDENCE.md -text -whitespace
+components/tirtc_sdk/manifest/** -text -whitespace
 
 # Preserve third-party source as delivered while keeping whitespace checks strict
 # for application code and release documentation.
 components/esp_lcd/** -whitespace
 components/espressif__esp_codec_dev/** -whitespace
-components/espressif__esp_cam_sensor/** -whitespace
 components/espressif__esp_h264/** -whitespace
 components/espressif__esp_hosted/** -whitespace
-components/espressif__esp_ipa/** -whitespace
 components/espressif__esp_lvgl_port/** -whitespace
 components/espressif__esp_video/** -whitespace
+
+# Patch context prefixes are significant; preserve patch bytes and indentation.
+tools/patches/*.patch -text -whitespace
+
+# Maintenance entries are local documentation, not public source exports.
+docs/history export-ignore
+.local export-ignore
+AGENTS.md export-ignore

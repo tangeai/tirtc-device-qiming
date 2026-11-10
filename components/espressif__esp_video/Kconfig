@@ -200,7 +200,7 @@ menu "Espressif Video Configuration"
                 Default is 10000ms (10 seconds).
     endif
 
-    config ESP_VIDEO_ENABLE_HW_H264_VIDEO_DEVICE
+    menuconfig ESP_VIDEO_ENABLE_HW_H264_VIDEO_DEVICE
         bool "Enable Hardware H.264 based Video Device"
         depends on IDF_TARGET_ESP32P4
         select ESP_VIDEO_ENABLE_H264_VIDEO_DEVICE
@@ -288,6 +288,36 @@ menu "Espressif Video Configuration"
 
     if ESP_VIDEO_ENABLE_ISP_VIDEO_DEVICE
 
+        choice ESP_VIDEO_ISP_DEVICE_HIST_SAMPLING_MODE
+            prompt "ISP Device Histogram Mode"
+            default ESP_VIDEO_ISP_DEVICE_HIST_SAMPLING_RGB
+            help
+                Select where the ISP device samples histogram statistics in the pipeline.
+
+                - RGB: Sample after Demosaic; results are not affected by later RGB-domain
+                  processing such as AWB, CCM and GAMMA.
+                - YUV_Y: Sample after RGB2YUV; results reflect the image after RGB-domain
+                  processing (e.g. AWB, CCM, GAMMA).
+
+        config ESP_VIDEO_ISP_DEVICE_HIST_SAMPLING_RGB
+            bool "RGB Histogram Sampling Mode"
+            help
+                Sample histogram in RGB after the Demosaic node.
+
+                At this point AWB, CCM, GAMMA and other later RGB-domain modules have not
+                been applied, so the histogram is unaffected by those modules. Prefer this
+                when GAMMA correction needs statistics from the pre-processed RGB image.
+
+        config ESP_VIDEO_ISP_DEVICE_HIST_SAMPLING_YUV_Y
+            bool "YUV_Y Histogram Sampling Mode"
+            help
+                Sample histogram on the Y channel after the RGB2YUV node.
+
+                The statistics include the effect of prior RGB-domain processing such as
+                AWB, CCM and GAMMA. Prefer this when GAMMA correction should be driven by
+                the post-processed image appearance.
+        endchoice
+
         config ESP_VIDEO_ENABLE_ISP_PIPELINE_CONTROLLER
             bool "Enable ISP Pipeline Controller"
             default n
@@ -336,6 +366,30 @@ menu "Espressif Video Configuration"
                     - Compatible autofocus motor hardware
                     - AF algorithm enabled in IPA configuration
         endif
+
+        config ESP_VIDEO_DISABLE_ISP_ERROR_INTERRUPT
+            bool "Disable ISP Error Interrupt"
+            default y
+            help
+                Disable the ISP error interrupt.
+
+                When this option is enabled, the ISP hardware error interrupt will be disabled,
+                and error conditions will not trigger error interrupts or their associated log output.
+                This can help reduce frequent error log messages from the ISP in scenarios
+                where recurring recoverable errors are expected.
+
+                Note: Frequent ISP error logs may cause heavy printing and in some cases
+                may trigger the hardware watchdog timer, leading to unwanted device resets.
+                If you observe frequent ISP error log spam during development, it is strongly
+                recommended to enable this option to suppress error interrupts and avoid
+                unintentional system resets.
+
+                Recommendation:
+                - Enable this option during development or debugging if you encounter
+                frequent ISP error printing causing instability.
+                - For production, evaluate your hardware and error frequency—keep this
+                option disabled to catch and log real errors unless you have confirmed
+                your system is stable and wish to fully suppress ISP error interrupts and logs.
     endif
 
     config ESP_VIDEO_ENABLE_CAMERA_MOTOR_CONTROLLER
@@ -350,6 +404,17 @@ menu "Espressif Video Configuration"
 
             Required for camera modules with autofocus capabilities.
             Disable if using only fixed-focus lenses.
+
+    config ESP_VIDEO_USE_CUSTOMIZED_ESP_H264_VERSION
+        bool "Use Customized esp_h264 Version"
+        default n
+        help
+            When disabled, use the esp_h264 version defined in
+            esp_video/idf_component.yml.
+
+            When enabled, ignore the esp_h264 version in
+            esp_video/idf_component.yml, and use the esp_h264 version
+            defined in another component's or main's idf_component.yml.
 
     rsource "./src/data_reprocessing/Kconfig.data_reprocessing"
 endmenu

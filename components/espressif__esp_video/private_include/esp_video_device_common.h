@@ -36,10 +36,24 @@ typedef struct esp_video_device_intf {
     esp_err_t (*init)(struct esp_video_device_common *common);
 
     /**
-     * Device inspects sensor_fmt, sets device-specific state, and
-     * returns config params (esp_video_device_common_init_data_t) for common.
+     * Validate sensor_fmt (the format being applied, not necessarily
+     * common->sensor_format yet) and fill config for the video buffer.
+     * Must not mutate common or adapter committed state; failures leave
+     * the device unchanged. Applied state is written by commit_init_config.
      */
-    esp_err_t (*start_init_config)(struct esp_video_device_common *common, esp_video_device_common_init_data_t *config);
+    esp_err_t (*start_init_config)(struct esp_video_device_common *common,
+                                   const esp_cam_sensor_format_t *sensor_fmt,
+                                   esp_video_device_common_init_data_t *config);
+
+    /**
+     * Commit adapter-private format state after common has accepted the
+     * prepared update (buffer config and in_color). Must not fail if
+     * start_init_config already succeeded for the same sensor_fmt.
+     * NULL → adapter has no private format state to commit.
+     */
+    void (*commit_init_config)(struct esp_video_device_common *common,
+                               const esp_cam_sensor_format_t *sensor_fmt,
+                               const esp_video_device_common_init_data_t *config);
 
     esp_err_t (*deinit)(struct esp_video_device_common *common);
     esp_err_t (*start)(struct esp_video_device_common *common, esp_cam_ctlr_handle_t *cam_ctrl_handle_ret);
@@ -67,19 +81,17 @@ typedef struct esp_video_device_intf {
     esp_err_t (*set_selection)(struct esp_video_device_common *common, struct v4l2_selection *selection);
 
     /**
-     * Called after sensor controls have been committed successfully.
-     * Devices whose capture interpretation depends on sensor controls can
-     * update their pending hardware configuration before STREAMON.
-     */
-    void (*sensor_ctrls_applied)(struct esp_video_device_common *common,
-                                 const struct v4l2_ext_controls *ctrls);
-
-    /**
      * Called by common_video_enum_framesizes AFTER index==0 check.
      * Device validates pixel_format (e.g. CSI checks supported output formats).
      * NULL → common checks pixel_format == current format.
      */
     esp_err_t (*check_enum_framesizes)(struct esp_video_device_common *common, struct v4l2_frmsizeenum *frmsize);
+
+    esp_err_t (*subscribe_event)(struct esp_video_device_common *common, struct v4l2_event_subscription *sub);
+
+    esp_err_t (*unsubscribe_event)(struct esp_video_device_common *common, struct v4l2_event_subscription *sub);
+
+    esp_err_t (*restart)(struct esp_video_device_common *common, bool restart_sensor);
 } esp_video_device_intf_t;
 
 /**
@@ -110,6 +122,10 @@ typedef struct esp_video_device_common {
     struct esp_video_buffer_element *backup_element;    /*!< Runtime: current backup element (managed by common callbacks) */
 
     esp_cam_ctlr_handle_t cam_ctrl_handle;          /*!< Camera controller handle */
+    bool is_event_subscribed;                       /*!< true: event is subscribed */
+    SemaphoreHandle_t cam_ctlr_mutex;               /*!< Semaphore to wait for restart */
+
+    struct v4l2_event_callback event_callback;      /*!< Event callback */
 
     struct esp_video *video;                        /*!< Pointer to the esp_video instance */
     void *priv;                                     /*!< Private data pointer to device-specific structure, device-specific structure will be allocated by the caller and will be passed to esp_video_device_common_create and esp_video_device_common_free */

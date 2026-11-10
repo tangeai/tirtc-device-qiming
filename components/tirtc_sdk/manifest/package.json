@@ -1,0 +1,87 @@
+{
+  "builder_profile": "combined",
+  "components": [
+    "rtc",
+    "store"
+  ],
+  "download_url": "https://repo-sdk.tange-ai.com/repository/tirtc-sdks/releases/espressif_esp32p4/tirtc__espressif_esp32p4__esp-idf5.5.4-riscv32-esp14.2.0_20260121__v2.6.0__mini/tirtc__espressif_esp32p4__esp-idf5.5.4-riscv32-esp14.2.0_20260121__v2.6.0__mini.tgz",
+  "orchestrator": {
+    "child_tree_sha256": {
+      "googlewebrtc-release": "f0dd845ab3e79922f0e27d7ed0b56378295c5e39c7bc50fc6490413d9adab901",
+      "nano-release": "67cbc419745507985589858571255efe376b63152928201ce7530fafb4ad72e4",
+      "tgsysadpt-release": "613b8e132e88062fc3285f9fa4502412ed59e1ec83cbdc69d3f0aa772b2dccd9",
+      "tgwebrtc-release": "f7e5eac1eb890b6cb2b49e6c7482198bb2a2b1b775169a5d04c9cfb8dc4afda6"
+    },
+    "commit": "79ed98c5a9dafa4c3524fa4a77d17d2af0cd6dad",
+    "current_builder": {
+      "builder": "espressif_esp32p4",
+      "lib_platform": "esp32p4",
+      "provider": "tgwebrtc",
+      "tgtrp_builder": "espressif_esp32p4"
+    },
+    "dirty": false,
+    "inputs": {
+      "googlewebrtc_ref": null,
+      "nano_ref": "v2.6.0",
+      "package_kind": "nano-sdk",
+      "tgsysadpt_commit": "247fecc0ba8501c14877ea5ddc1b5814036333ea",
+      "tgsysadpt_ref": "247fecc0ba8501c14877ea5ddc1b5814036333ea",
+      "tgsysadpt_tag": "",
+      "tgwebrtc_ref": "tag.v1.5.29"
+    },
+    "project": "tirtc-sdk-release",
+    "ref": "79ed98c5a9dafa4c3524fa4a77d17d2af0cd6dad"
+  },
+  "source_commits": {
+    "nano": "894972fbf2f5a8be921756a611dc68a14c528e25",
+    "tgsysadpt": "247fecc0ba8501c14877ea5ddc1b5814036333ea",
+    "tgwebrtc": "64b74c0a3be692f03bd42ded3a6ebbcb1162ce24",
+    "tirtc_sdk_release": "79ed98c5a9dafa4c3524fa4a77d17d2af0cd6dad"
+  },
+  "ssl_support": {
+    "config": "CONFIG_SSL_SUPPORT",
+    "mode": "disabled",
+    "value": 0
+  },
+  "third_party": {
+    "dependencies": [
+      {
+        "artifact": "tgtrp__espressif-esp32p4__esp-idf5.5.4-riscv32-esp14.2.0_20260121__64b74c0__20261103-112324__mini",
+        "builder": "espressif_esp32p4",
+        "channel": "ci",
+        "group": "tgwebrtc",
+        "lib_platform": "esp32p4",
+        "name": "tgtrp",
+        "provider": "tgwebrtc",
+        "sha256": "7d1407848aa00918fa7e384f4277d6245c8d7b1c747bbf2e3fe19e4344529c43",
+        "source": {
+          "commit": "64b74c0a3be692f03bd42ded3a6ebbcb1162ce24",
+          "tag": "tag.v1.5.29"
+        },
+        "source_commit": "64b74c0a3be692f03bd42ded3a6ebbcb1162ce24",
+        "source_commits": {
+          "tgsysadpt": "247fecc0ba8501c14877ea5ddc1b5814036333ea",
+          "tgwebrtc": "64b74c0a3be692f03bd42ded3a6ebbcb1162ce24"
+        },
+        "sources": {
+          "tgsysadpt": {
+            "commit": "247fecc0ba8501c14877ea5ddc1b5814036333ea",
+            "ref": "247fecc0ba8501c14877ea5ddc1b5814036333ea"
+          },
+          "tgwebrtc": {
+            "commit": "64b74c0a3be692f03bd42ded3a6ebbcb1162ce24",
+            "tag": "tag.v1.5.29"
+          }
+        },
+        "target": "espressif-esp32p4",
+        "toolchain": "esp-idf5.5.4-riscv32-esp14.2.0_20260121",
+        "variant": "mini"
+      }
+    ],
+    "deps_file": "3rd/deps.ini",
+    "deps_sha256": "caad810772fa684c76640f56e6c780d3003f21142d772663233024c2be7af846",
+    "lib_platforms": [
+      "esp32p4"
+    ]
+  }
+}
